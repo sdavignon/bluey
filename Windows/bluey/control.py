@@ -6,6 +6,7 @@ import threading
 import time
 import webbrowser
 from urllib.parse import urlparse
+from .text_input import normalize_text
 
 ACTION_TOOLS = [
     {"type": "function", "name": name, "description": description,
@@ -14,7 +15,7 @@ ACTION_TOOLS = [
     for name, description, properties in [
         ("click", "Click a primary-display location. Requires local confirmation.",
          {"x": {"type": "number"}, "y": {"type": "number"}}),
-        ("type_text", "Type ASCII text into the focused non-password field. Requires local confirmation.",
+        ("type_text", "Type Unicode text, including line breaks, into the focused non-password field. Requires local confirmation. Newlines press Enter; use only in a multiline editor, never to submit a form or send a message.",
          {"text": {"type": "string"}}),
         ("press_keys", "Press a shortcut, e.g. ctrl+c. Requires local confirmation.",
          {"keys": {"type": "string"}}),
@@ -54,15 +55,19 @@ def shortcut(value):
 
 
 class ComputerControl:
-    def __init__(self, gui, password_check, confirm, enabled, cancelled=None):
+    def __init__(self, gui, password_check, confirm, enabled, cancelled=None, text_writer=None, progress=None):
         self.gui, self.password_check, self.confirm, self.enabled = gui, password_check, confirm, enabled
         self.cancelled = cancelled or (lambda: False)
+        self.text_writer = text_writer
+        self.progress = progress or (lambda _: None)
         self.lock = threading.Lock()
         gui.FAILSAFE = True
         gui.PAUSE = 0.15
 
     def run(self, name, args):
-        with self.lock:
+        if not self.lock.acquire(blocking=False):
+            return "Another computer action is still running. Wait for its result before retrying."
+        try:
             if not self.enabled() or self.cancelled():
                 return "Computer control is off. Enable it in the desktop app."
             # Validate everything before showing a prompt or doing anything.
@@ -74,9 +79,9 @@ class ComputerControl:
             elif name == "drag":
                 origin, target = point("from_x", "from_y"), point("to_x", "to_y")
             elif name == "type_text":
-                text = args.get("text")
-                if not isinstance(text, str) or not text.isascii() or len(text) > 2000 or any(ord(c) < 32 for c in text):
-                    raise ValueError("Use printable ASCII text of at most 2000 characters")
+                text = normalize_text(args.get("text"))
+                if self.text_writer is None and not text.isascii():
+                    raise ValueError("Unicode text requires the Windows native text-input adapter.")
             elif name == "press_keys":
                 keys = shortcut(args.get("keys"))
             elif name == "scroll":
@@ -97,14 +102,17 @@ class ComputerControl:
                     raise ValueError("App is not on the allowlist")
             else:
                 raise ValueError("Unsupported action")
+            self.progress("Waiting for your approval on the PC.")
             if not self.confirm(name, args):
                 return "The user declined or cancelled this action."
             if not self.enabled() or self.cancelled():
                 return "Computer control stopped."
             if name in ("type_text", "press_keys"):
                 # Unknown focus or UI Automation failure is a refusal, not permission to type.
+                self.progress("Checking the focused field before typing.")
                 if self.password_check() is not False:
                     return "Cannot verify a non-password field. Ask the user to enter this themselves."
+            self.progress("Applying the approved computer action.")
             previous = self.gui.position()
             try:
                 if name == "click": self.gui.click(*target)
@@ -115,7 +123,13 @@ class ComputerControl:
                     for character in text:
                         if self.cancelled() or not self.enabled():
                             return "Computer control stopped during typing."
-                        self.gui.write(character, _pause=False)
+                        self.gui.failSafeCheck()
+                        if self.text_writer is not None:
+                            self.text_writer(character)
+                        elif character == "\n":
+                            self.gui.press("enter", _pause=False)
+                        else:
+                            self.gui.write(character, _pause=False)
                         time.sleep(0.005)
                 elif name == "press_keys": self.gui.hotkey(*keys)
                 elif name == "scroll":
@@ -130,3 +144,5 @@ class ComputerControl:
                 if not self.cancelled() and tuple(self.gui.position()) not in self.gui.FAILSAFE_POINTS:
                     self.gui.moveTo(*previous)
             return "Action completed. Call look_at_screen to verify the result before the next action."
+        finally:
+            self.lock.release()

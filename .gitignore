@@ -20,3 +20,5 @@ __pycache__/
 *.pyc
 Windows/.tools/
 Windows/Bluey-Android-debug.apk
+Windows/*.spec
+Windows/build-*.log

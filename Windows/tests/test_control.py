@@ -7,6 +7,7 @@ class FakeMouse:
     def __init__(self): self.calls = []
     def size(self): return (1920, 1080)
     def position(self): return (800, 400)
+    def failSafeCheck(self): pass
     def __getattr__(self, name):
         return lambda *args, **kwargs: self.calls.append((name, args, kwargs))
 
@@ -40,7 +41,7 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.mouse.calls, [])
 
     def test_invalid_input_and_url_schemes_never_act(self):
-        for name, args in [('click', {'x': -1,'y': 0}), ('type_text', {'text': 'a\nb'}),
+        for name, args in [('click', {'x': -1,'y': 0}), ('type_text', {'text': 'a\tb'}),
                            ('open_url', {'url': 'file:///etc/passwd'}), ('open_url', {'url': 'https://user:pass@example.com'}),
                            ('open_app', {'name': 'powershell'}), ('press_keys', {'keys': 'win+l'})]:
             with self.assertRaises(ValueError): self.control.run(name, args)
@@ -58,6 +59,26 @@ class ControlTests(unittest.TestCase):
         for value in ['ctrl+alt+delete', 'ctrl+shift+esc', 'alt+tab', 'ctrl+alt+s', 'win+l', 'alt+f4']:
             with self.assertRaises(ValueError): shortcut(value)
         self.assertEqual(shortcut('command+c'), ['ctrl', 'c'])
+
+    def test_unicode_newlines_writer_and_approval_guards(self):
+        sent = []
+        self.control.text_writer = sent.append
+        for allowed, password in [(False, False), (True, True), (True, None)]:
+            self.allowed, self.password = allowed, password
+            self.control.run('type_text', {'text': 'Café 🫐\r\nSecond line'})
+        self.assertEqual(sent, [])
+        self.allowed, self.password = True, False
+        self.control.run('type_text', {'text': 'Café 🫐\r\nSecond line'})
+        self.assertEqual(''.join(sent), 'Café 🫐\nSecond line')
+
+    def test_native_writer_cancellation_checked_each_character(self):
+        sent = []
+        def writer(char):
+            sent.append(char)
+            self.cancelled = True
+        self.control.text_writer = writer
+        self.assertIn('stopped during', self.control.run('type_text', {'text': '🫐é\nrest'}))
+        self.assertEqual(sent, ['🫐'])
 
 class SupportedActionTests(unittest.TestCase):
     def test_shortcut_scroll_drag_and_printable_text(self):

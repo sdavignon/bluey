@@ -14,6 +14,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
       - name: Build, test and lint Android
         working-directory: Android
@@ -38,12 +40,20 @@ jobs:
         working-directory: Windows
         run: python -m unittest discover -s tests -v
       - name: Windows dependencies
-        run: python -c "import tkinter, pyautogui, pywinauto, keyring, zeroconf; from PIL import ImageGrab"
+        run: python -c "import tkinter, pyautogui, pywinauto, pystray, keyring, zeroconf, google.auth, google_auth_oauthlib; from PIL import ImageGrab"
       - name: Package executable
         working-directory: Windows
         run: |
           python -m pip install pyinstaller==6.15.0
-          python -m PyInstaller --noconfirm --windowed --onedir --name Bluey --paths . --collect-submodules keyring.backends --collect-submodules pywinauto --hidden-import comtypes --hidden-import pyautogui launcher.py
+          python -m bluey.artwork
+          python -m PyInstaller --clean --noconfirm --windowed --onedir --name Bluey --icon bluey/assets/bluey.ico --add-data "bluey/assets;bluey/assets" --paths . --collect-submodules keyring.backends --collect-submodules pywinauto --hidden-import comtypes --hidden-import pyautogui --hidden-import pystray._win32 launcher.py
+      - name: Package temporary customer client
+        working-directory: Windows
+        run: python -m PyInstaller --clean --noconfirm --windowed --onefile --name Bluey-Customer --icon bluey/assets/bluey.ico --add-data "bluey/assets;bluey/assets" --paths . --collect-submodules keyring.backends --collect-submodules pywinauto --hidden-import comtypes --hidden-import pyautogui --hidden-import pystray._win32 launcher_customer.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bluey-Customer
+          path: Windows/dist/Bluey-Customer.exe
       - uses: actions/upload-artifact@v4
         with:
           name: Bluey-Windows

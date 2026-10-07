@@ -3,3 +3,7 @@ zeroconf==0.147.0
 keyring==25.6.0
 PyAutoGUI==0.9.54; sys_platform == 'win32'
 pywinauto==0.6.9; sys_platform == 'win32'
+pystray==0.19.5; sys_platform == 'win32'
+google-auth==2.60.0
+google-auth-oauthlib==1.5.0
+cryptography==50.0.2
