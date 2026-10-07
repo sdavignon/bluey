@@ -20,6 +20,7 @@ def main():
         raise SystemExit("The desktop UI requires Windows 10/11. Protocol tests run on Linux.")
     import pyautogui
     from .control import ComputerControl
+    from .text_input import UnicodeTextWriter
     from .tray import Tray, WindowLifecycle
     from .overlay import Overlay
     from PIL import Image, ImageGrab, ImageTk
@@ -31,6 +32,8 @@ def main():
     user32.GetParent.argtypes = [wintypes.HWND]
     user32.GetParent.restype = wintypes.HWND
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.IsWindow.argtypes = [wintypes.HWND]
+    user32.IsWindow.restype = wintypes.BOOL
     user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
     user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
     user32.SetProcessDPIAware()
@@ -117,26 +120,37 @@ def main():
     def confirm(name, args):
         done = threading.Event()
         result = [False]
+        request_generation = pairing_generation
         foreground = ctypes.windll.user32.GetForegroundWindow()
-        events.put(("confirm", (name, args, done, result, foreground)))
+        events.put(("confirm", (name, args, done, result, foreground, request_generation)))
         # The prompt has a deadline and stop/unpair cancels a waiting action.
         deadline = time.monotonic() + 30
-        while time.monotonic() < deadline and enabled.is_set() and not stopped.is_set():
+        while time.monotonic() < deadline and enabled.is_set() and not stopped.is_set() and request_generation == pairing_generation:
             if done.wait(.1):
-                return result[0]
+                return result[0] and request_generation == pairing_generation
         done.set()
         return False
 
-    control = ComputerControl(pyautogui, password_check, confirm, enabled.is_set, stopped.is_set)
+    control = ComputerControl(pyautogui, password_check, confirm, enabled.is_set, stopped.is_set,
+                              text_writer=UnicodeTextWriter())
 
     def run_action(name, args):
         try:
-            return control.run(name, args)
+            outcome = control.run(name, args)
         except pyautogui.FailSafeException:
             enabled.clear()
             stopped.set()
             events.put(("stopped", "Computer control stopped at a failsafe corner."))
             return "Computer control stopped at a failsafe corner."
+        except ValueError as error:
+            # Control validation messages are fixed local text, never provider bodies.
+            outcome = "Computer action rejected: " + str(error)
+        except OSError:
+            outcome = "Windows rejected the input. Check whether the target window runs as administrator or is a protected dialog."
+        except Exception as error:
+            outcome = "Computer action failed (" + type(error).__name__ + "). Check the target window and try again."
+        events.put(("control_result", outcome))
+        return outcome
 
     def run_tracker(name, args):
         if customer:
@@ -231,7 +245,7 @@ def main():
             host.broadcast({"command": name})
 
     def tick():
-        nonlocal point, caption, pending_confirmation, pending_tracker_confirmation, phone_speaking, speaking_updated
+        nonlocal point, caption, pending_confirmation, pending_tracker_confirmation, phone_speaking, speaking_updated, pairing_generation
         try:
             while True:
                 kind, value = events.get_nowait()
@@ -262,8 +276,8 @@ def main():
                     tk.Button(dialog, text="Decline", command=finish_tracker).pack(side="right", padx=20, pady=12)
                     dialog.protocol("WM_DELETE_WINDOW", finish_tracker)
                 elif kind == "confirm":
-                    name, args, done, result, foreground = value
-                    if done.is_set() or not enabled.is_set() or stopped.is_set() or pending_confirmation:
+                    name, args, done, result, foreground, request_generation = value
+                    if done.is_set() or not enabled.is_set() or stopped.is_set() or pending_confirmation or request_generation != pairing_generation:
                         done.set()
                         continue
                     dialog = tk.Toplevel(root)
@@ -271,15 +285,34 @@ def main():
                     dialog.title("Bluey action confirmation")
                     dialog.attributes("-topmost", True)
                     tk.Label(dialog, text=f"Allow {name}?\n{str(args)[:2100]}", wraplength=450).pack(padx=20, pady=20)
-                    def finish(allow=False, window=dialog, completion=done, answer=result, target=foreground):
+                    def finish(allow=False, window=dialog, completion=done, answer=result, target=foreground, request_id=request_generation):
                         nonlocal pending_confirmation
-                        if not completion.is_set():
-                            if allow and enabled.is_set() and not stopped.is_set():
-                                ctypes.windll.user32.SetForegroundWindow(target)
-                                answer[0] = ctypes.windll.user32.GetForegroundWindow() == target
-                            completion.set()
                         window.destroy()
                         pending_confirmation = None
+                        if completion.is_set():
+                            return
+                        if not allow or not enabled.is_set() or stopped.is_set():
+                            completion.set()
+                            return
+                        # Destroying the prompt may steal focus back to its Tk parent.
+                        # Restore only after Tk has processed that transition, then verify.
+                        def restore():
+                            if completion.is_set():
+                                return
+                            if not enabled.is_set() or stopped.is_set() or request_id != pairing_generation or not target or not user32.IsWindow(target):
+                                status.set("Computer control stopped or target window closed. Focus the app and ask again.")
+                                completion.set()
+                                return
+                            ctypes.windll.user32.SetForegroundWindow(target)
+                            def settled():
+                                if not completion.is_set():
+                                    answer[0] = (enabled.is_set() and not stopped.is_set() and request_id == pairing_generation and user32.IsWindow(target)
+                                                 and ctypes.windll.user32.GetForegroundWindow() == target)
+                                    if not answer[0]:
+                                        status.set("Could not restore the target window. Focus it and ask again.")
+                                    completion.set()
+                            root.after(80, settled)
+                        root.after(80, restore)
                     tk.Button(dialog, text="Allow", command=lambda fn=finish: fn(True)).pack(side="left", padx=20, pady=10)
                     tk.Button(dialog, text="Decline", command=finish).pack(side="right", padx=20, pady=10)
                     dialog.protocol("WM_DELETE_WINDOW", finish)
@@ -299,9 +332,15 @@ def main():
                     speaking_updated = time.monotonic()
                 elif kind == "error":
                     status.set(value)
+                elif kind == "control_result":
+                    status.set(value)
                 elif kind == "disconnect" and host and not host.clients:
                     phone_speaking = False
-                    status.set("Waiting for a phone.")
+                    pairing_generation += 1
+                    enabled.clear()
+                    stopped.set()
+                    control_flag.set(False)
+                    status.set("Phone disconnected. Computer control disabled; reconnect and enable it again.")
                     caption, point = "", None
         except queue.Empty:
             pass

@@ -6,6 +6,7 @@ import threading
 import time
 import webbrowser
 from urllib.parse import urlparse
+from .text_input import normalize_text
 
 ACTION_TOOLS = [
     {"type": "function", "name": name, "description": description,
@@ -14,7 +15,7 @@ ACTION_TOOLS = [
     for name, description, properties in [
         ("click", "Click a primary-display location. Requires local confirmation.",
          {"x": {"type": "number"}, "y": {"type": "number"}}),
-        ("type_text", "Type ASCII text into the focused non-password field. Requires local confirmation.",
+        ("type_text", "Type Unicode text, including line breaks, into the focused non-password field. Requires local confirmation. Newlines press Enter; use only in a multiline editor, never to submit a form or send a message.",
          {"text": {"type": "string"}}),
         ("press_keys", "Press a shortcut, e.g. ctrl+c. Requires local confirmation.",
          {"keys": {"type": "string"}}),
@@ -54,9 +55,10 @@ def shortcut(value):
 
 
 class ComputerControl:
-    def __init__(self, gui, password_check, confirm, enabled, cancelled=None):
+    def __init__(self, gui, password_check, confirm, enabled, cancelled=None, text_writer=None):
         self.gui, self.password_check, self.confirm, self.enabled = gui, password_check, confirm, enabled
         self.cancelled = cancelled or (lambda: False)
+        self.text_writer = text_writer
         self.lock = threading.Lock()
         gui.FAILSAFE = True
         gui.PAUSE = 0.15
@@ -74,9 +76,9 @@ class ComputerControl:
             elif name == "drag":
                 origin, target = point("from_x", "from_y"), point("to_x", "to_y")
             elif name == "type_text":
-                text = args.get("text")
-                if not isinstance(text, str) or not text.isascii() or len(text) > 2000 or any(ord(c) < 32 for c in text):
-                    raise ValueError("Use printable ASCII text of at most 2000 characters")
+                text = normalize_text(args.get("text"))
+                if self.text_writer is None and not text.isascii():
+                    raise ValueError("Unicode text requires the Windows native text-input adapter.")
             elif name == "press_keys":
                 keys = shortcut(args.get("keys"))
             elif name == "scroll":
@@ -115,7 +117,13 @@ class ComputerControl:
                     for character in text:
                         if self.cancelled() or not self.enabled():
                             return "Computer control stopped during typing."
-                        self.gui.write(character, _pause=False)
+                        self.gui.failSafeCheck()
+                        if self.text_writer is not None:
+                            self.text_writer(character)
+                        elif character == "\n":
+                            self.gui.press("enter", _pause=False)
+                        else:
+                            self.gui.write(character, _pause=False)
                         time.sleep(0.005)
                 elif name == "press_keys": self.gui.hotkey(*keys)
                 elif name == "scroll":

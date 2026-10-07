@@ -26,3 +26,9 @@ python -m PyInstaller --clean --noconfirm --windowed --onefile --name Bluey-Cust
 ```
 
 The complete portable artifact is `dist/Bluey-Customer.exe`. Do not bundle `.venv`, local settings, API keys, Google client JSON, or credentials.
+
+## Windows text control
+
+`type_text` supports Unicode, emoji and line breaks (CRLF/CR normalized to LF), with a 2000-character limit. It uses Windows Unicode keyboard input without replacing the clipboard. Tabs and other control characters are rejected. Release modifier keys before approving typing. The target must be a normal desktop window with a verified non-password field; protected/elevated windows may reject input.
+
+The approval dialog closes before Bluey restores and verifies the original window's focus. If the target closes or the phone disconnects, the action is cancelled. Reconnect and re-enable computer control after a disconnect; restart voice after changing the control setting to reload tools. Capture and action coordinates still refer to the primary display.
