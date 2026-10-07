@@ -8,3 +8,13 @@ xcuserdata/
 Secrets.xcconfig
 *.env
 .env*
+
+# Android and Windows local build outputs
+Android/.gradle/
+Android/**/build/
+Android/local.properties
+Windows/.venv/
+Windows/dist/
+Windows/build/
+__pycache__/
+*.pyc

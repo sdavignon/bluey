@@ -1,0 +1,5 @@
+Pillow==11.3.0
+zeroconf==0.147.0
+keyring==25.6.0
+PyAutoGUI==0.9.54; sys_platform == 'win32'
+pywinauto==0.6.9; sys_platform == 'win32'

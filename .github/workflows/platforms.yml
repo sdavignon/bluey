@@ -1,0 +1,50 @@
+name: Android and Windows
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build, test and lint Android
+        working-directory: Android
+        run: ./gradlew assembleDebug testDebugUnitTest lintDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bluey-Android-debug
+          path: Android/app/build/outputs/apk/debug/app-debug.apk
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Windows/requirements.txt
+      - name: Install
+        working-directory: Windows
+        run: python -m pip install -r requirements.txt
+      - name: Protocol and control tests
+        working-directory: Windows
+        run: python -m unittest discover -s tests -v
+      - name: Windows dependencies
+        run: python -c "import tkinter, pyautogui, pywinauto, keyring, zeroconf; from PIL import ImageGrab"
+      - name: Package executable
+        working-directory: Windows
+        run: |
+          python -m pip install pyinstaller==6.15.0
+          python -m PyInstaller --noconfirm --windowed --onedir --name Bluey --paths . --collect-submodules keyring.backends --collect-submodules pywinauto --hidden-import comtypes --hidden-import pyautogui launcher.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bluey-Windows
+          path: Windows/dist/Bluey/

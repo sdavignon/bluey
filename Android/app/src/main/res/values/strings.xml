@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Bluey</string>
+    <string name="pair_desktop">Pair desktop</string>
+    <string name="microphone_denied">Microphone permission is needed for voice. Enable it in Settings.</string>
+    <string name="invalid_address">Enter a valid address and port.</string>
+    <string name="wake_sleep">Wake / sleep</string>
+    <string name="ask_now">Ask now</string>
+</resources>

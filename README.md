@@ -1,6 +1,6 @@
 # Bluey
 
-A blueberry character who lives on an iPhone under your Mac's screen and points at things with his own big cursor.
+A blueberry character who lives on your phone under your computer's screen and points at things with his own big cursor.
 
 **Now:** no voice out. Double tap him on the phone (or press ⌥Space on the Mac) to start a session: the phone's mic stays on and everything you say becomes context, but he stays quiet. **Press and hold the screen** to ask him something; let go and he answers. His reply pops up as a cute speech bubble next to his cursor (or above the phone when he isn't pointing), with a little cartoon chirp from the phone. Ask "what's this?" and he points at whatever is under your mouse. Double tap again and he goes back to follow mode.
 
@@ -44,3 +44,19 @@ On the phone: double tap him to wake him up or put him back to sleep, and press 
 - `Shared/` pairing protocol (Bonjour `_googly._tcp`, newline JSON) and colors, used by both apps
 - `Mac/` menu bar app (Swift package target `GooglyMac`)
 - `iOS/` iPhone app (SwiftUI)
+
+## Android and Windows
+
+Bluey now has an [Android companion](Android/README.md) and a [Windows desktop host](Windows/README.md). Both use the existing `_googly._tcp` / newline JSON protocol: Android can pair with Mac or Windows, and the iPhone can pair with Windows. See each platform's README for installation and device checks.
+
+| Feature | Mac + iPhone | Android companion | Windows host |
+| --- | --- | --- | --- |
+| LAN discovery, pairing, face and gaze | Yes | Yes | Yes |
+| Hold-to-ask Realtime voice, text replies | Yes | Yes, foreground only | Hosts tokens and captions |
+| Screen capture and coordinate pointing | Yes | Runs tools on desktop | Primary display |
+| Mouse/keyboard control | Yes | Runs tools on desktop | PyAutoGUI, opt-in, local confirmation |
+| OCR text target IDs | Yes | Depends on desktop | No; coordinate pointing |
+| Meeting-note recording and archives | Yes | Not yet | Not yet |
+| Automatic long-session voice recovery | Yes | Restart by double tap | Depends on phone |
+
+Windows requires Python 3.11+ with Tcl/Tk; Android requires Android 8+ and builds with SDK 35/JDK 17+. GitHub Actions builds the Android debug APK, tests both implementations, and packages the Windows application. The Apple implementations remain intact.
