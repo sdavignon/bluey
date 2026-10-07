@@ -47,6 +47,14 @@ On the phone: double tap him to wake him up or put him back to sleep, and press 
 
 ## Android and Windows
 
+Android **Phone settings** now supports phone-owned encrypted credentials and **Meeting mode**. Meeting mode listens only after an explicit wake, stays quiet until **Ask now** or hold/release, and gives a spoken recap of key points, decisions, owners and deadlines that were actually stated. It uses far-field input processing and disables tool actions during meeting recaps. Sleep stops listening. This is live session context, not an archived recording or a durable meeting transcript; switch back to companion mode to request an approved project update.
+
+For temporary customer PCs, use the [portable customer client and phone setup](docs/customer-pc.md). Credentials remain on the provisioned phone. Copy the executable from Android File transfer storage and run it locally; pairing uses a trusted local network. The Windows character follows the pointer across monitors, with captions flipping at the right edge. Screen capture and computer-action coordinates remain limited to the primary display.
+
+Windows settings include **Animate character · eyes, blink and speech**. Eyes follow the same gaze sent to the phone; the mouth follows phone TTS playback over the existing TCP link, with a heartbeat timeout to prevent a stuck speaking face. Turning the option off restores the static character. The option lasts for the current app run, including customer mode.
+
+If voice reports **OpenAI API credit is exhausted**, add available credit in the API project's billing settings before reconnecting. Token creation can succeed even when a voice response is blocked by the credit limit; a successful connection test does not prove billable voice generation is available.
+
 Bluey now has an [Android companion](Android/README.md) and a [Windows desktop host](Windows/README.md). Both use the existing `_googly._tcp` / newline JSON protocol: Android can pair with Mac or Windows, and the iPhone can pair with Windows. See each platform's README for installation and device checks.
 
 | Feature | Mac + iPhone | Android companion | Windows host |

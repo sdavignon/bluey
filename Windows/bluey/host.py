@@ -15,6 +15,14 @@ from .protocol import Decoder, encode
 MODEL = "gpt-realtime-2.1"
 
 
+class PhoneCredentialsRequired(ValueError):
+    """Portable hosts never mint tokens using customer-PC credentials."""
+
+
+def phone_credentials_only(_key):
+    raise PhoneCredentialsRequired("Configure credentials on the phone.")
+
+
 def session_config(computer_control=False, tracker_enabled=False):
     def tool(name, description, properties):
         return {"type": "function", "name": name, "description": description,
@@ -78,9 +86,10 @@ def mint_token(key, computer_control=False, tracker_enabled=False):
 
 
 class Host:
-    def __init__(self, screen, event, key, token_factory=mint_token, name=None, action=None, tracker=None):
+    def __init__(self, screen, event, key, token_factory=mint_token, name=None, action=None, tracker=None, config_factory=session_config):
         self.screen, self.event, self.key = screen, event, key
         self.token_factory = token_factory
+        self.config_factory = config_factory
         self.action = action
         self.tracker = tracker
         self.name = name or socket.gethostname()
@@ -151,8 +160,15 @@ class Host:
                 for packet in decoder.feed(data):
                     if "hello" in packet:
                         self.event("phone", str(packet["hello"])[:200])
-                    if packet.get("command") in ("tool", "realtimeToken"):
+                    if packet.get("command") in ("tool", "realtimeToken", "realtimeConfig"):
                         self.work.submit(self._request, entry, packet)
+                    elif packet.get("command") == "speaking":
+                        # Speech playback is a boolean state, never a remote face payload.
+                        if type(packet.get("active")) is bool:
+                            self.event("speaking", packet["active"])
+                        if packet.get("callID"):
+                            self._send(entry, {"command": "speaking", "callID": packet["callID"],
+                                               "text": None})
                     elif packet.get("callID"):
                         self._send(entry, {"command": packet.get("command", "unsupported"),
                                            "callID": packet["callID"], "text": None})
@@ -171,6 +187,8 @@ class Host:
         try:
             if command == "realtimeToken":
                 reply["text"] = self.token_factory(self.key())
+            elif command == "realtimeConfig":
+                reply["text"] = json.dumps(self.config_factory())
             else:
                 args = json.loads(packet.get("text") or "{}")
                 if not isinstance(args, dict):
@@ -209,9 +227,11 @@ class Host:
         except Exception as error:
             # Do not expose API response bodies or credentials on the unauthenticated LAN.
             self.event("error", f"{command} failed ({type(error).__name__}). Check key and connection.")
-            reply["text"] = None if command == "realtimeToken" else "The desktop could not complete this tool."
+            reply["text"] = None if command in ("realtimeToken", "realtimeConfig") else "The desktop could not complete this tool."
             if command == "realtimeToken":
-                if isinstance(error, ValueError):
+                if isinstance(error, PhoneCredentialsRequired):
+                    message = "This customer-PC client uses credentials from your phone. Set your OpenAI key in Bluey's phone settings."
+                elif isinstance(error, ValueError):
                     message = "No OpenAI key saved on the desktop. Save it once in Bluey settings."
                 elif isinstance(error, urllib.error.HTTPError):
                     message = {401: "The saved OpenAI key was rejected. Update it in Bluey settings.",

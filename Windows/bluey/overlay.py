@@ -2,23 +2,35 @@
 import ctypes
 from ctypes import wintypes as W
 import os
+import math
+import time
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
+from .artwork import animated_character
 
 
 def premultiplied_bgra(image):
     """UpdateLayeredWindow requires premultiplied, top-down BGRA pixels."""
-    data = bytearray(image.convert("RGBA").tobytes())
-    for i in range(0, len(data), 4):
-        r, g, b, a = data[i:i+4]
-        data[i:i+4] = bytes(((b*a+127)//255, (g*a+127)//255, (r*a+127)//255, a))
-    return bytes(data)
+    r,g,b,a = image.convert("RGBA").split()
+    return Image.merge("RGBA", (ImageChops.multiply(b,a), ImageChops.multiply(g,a), ImageChops.multiply(r,a), a)).tobytes()
 
 
-def render_frame(art, caption):
+def placement(x, y, bounds, caption):
+    """Keep the character next to the pointer on its monitor, not the primary."""
+    left, top, right, bottom = bounds
+    width, height = (360, 160) if caption else (88, 80)
+    avatar_x = max(left, min(right-88, int(x)+12))
+    flip = bool(caption and avatar_x+360 > right)
+    window_x = avatar_x-272 if flip else avatar_x
+    window_x = max(left, min(right-width, window_x))
+    window_y = max(top, min(bottom-height, int(y)+12))
+    return window_x, window_y, flip, width, height
+
+
+def render_frame(art, caption, caption_left=False):
     image = Image.new("RGBA", (360, 160))
-    image.alpha_composite(art.resize((84, 76), Image.Resampling.LANCZOS), (2, 4))
+    image.alpha_composite(art.resize((84, 76), Image.Resampling.LANCZOS), (274 if caption_left else 2, 4))
     if caption:
         draw = ImageDraw.Draw(image)
         try:
@@ -39,8 +51,9 @@ def render_frame(art, caption):
             while lines[-1] and draw.textlength(lines[-1]+"…", font=font) > 245:
                 lines[-1] = lines[-1][:-1]
             lines[-1] += "…"
-        draw.rounded_rectangle((92, 8, 358, 152), radius=10, fill="#eef0ff")
-        draw.multiline_text((99, 14), "\n".join(lines), font=font, fill="#17151f", spacing=3)
+        offset = -90 if caption_left else 0
+        draw.rounded_rectangle((92+offset, 8, 358+offset, 152), radius=10, fill="#eef0ff")
+        draw.multiline_text((99+offset, 14), "\n".join(lines), font=font, fill="#17151f", spacing=3)
     return image
 
 
@@ -55,12 +68,20 @@ class _Blend(ctypes.Structure):
     _fields_ = [("op", W.BYTE), ("flags", W.BYTE), ("alpha", W.BYTE), ("format", W.BYTE)]
 
 
+class _MonitorInfo(ctypes.Structure):
+    _fields_ = [("size", W.DWORD), ("monitor", W.RECT), ("work", W.RECT), ("flags", W.DWORD)]
+
+
 class Overlay:
     width, height = 360, 160
 
     def __init__(self, art):
         self.art = art.convert("RGBA")
         self.caption = None
+        self.caption_left = False
+        self.animation_state = None
+        self.background = None
+        self.small_art = self.art.resize((84,76), Image.Resampling.LANCZOS)
         self.hwnd = self.dc = self.bitmap = self.previous = None
         self.visible = False
         self.x = self.y = 0
@@ -72,6 +93,8 @@ class Overlay:
             (self.user.SetWindowPos, [W.HWND, W.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.UINT], W.BOOL),
             (self.user.ShowWindow, [W.HWND, ctypes.c_int], W.BOOL),
             (self.user.DestroyWindow, [W.HWND], W.BOOL),
+            (self.user.MonitorFromPoint, [W.POINT, W.DWORD], W.HANDLE),
+            (self.user.GetMonitorInfoW, [W.HANDLE, ctypes.POINTER(_MonitorInfo)], W.BOOL),
             (self.gdi.CreateCompatibleDC, [W.HDC], W.HDC),
             (self.gdi.CreateDIBSection, [W.HDC, ctypes.POINTER(_BitmapInfo), W.UINT, ctypes.POINTER(ctypes.c_void_p), W.HANDLE, W.DWORD], W.HBITMAP),
             (self.gdi.SelectObject, [W.HDC, W.HANDLE], W.HANDLE),
@@ -98,19 +121,45 @@ class Overlay:
             self.close()
             raise
 
-    def update(self, x, y, caption):
+    def monitor_bounds(self, x, y):
+        monitor = self.user.MonitorFromPoint(W.POINT(int(x), int(y)), 2)  # nearest monitor
+        info = _MonitorInfo()
+        info.size = ctypes.sizeof(info)
+        if not monitor or not self.user.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        rect = info.monitor
+        return rect.left, rect.top, rect.right, rect.bottom
+
+    def follow(self, x, y, caption, gaze=(0,0), speaking=False, animate=True):
+        px, py, flip, _, _ = placement(x, y, self.monitor_bounds(x, y), caption)
+        now = time.monotonic()
+        phase = now % 4.2
+        closed = math.sin(math.pi*phase/.16) if phase < .16 else 0
+        talk = .5+.35*math.sin(now*19)*math.sin(now*7.3) if speaking else 0
+        self.update(px, py, caption, flip, (gaze,talk,closed) if animate else None)
+
+    def update(self, x, y, caption, caption_left=False, animation=None):
         if not self.hwnd:
             return
         self.x, self.y = int(x), int(y)
-        if caption != self.caption:
-            data = premultiplied_bgra(render_frame(self.art, caption))
+        changed = caption != self.caption or caption_left != self.caption_left
+        if changed or animation != self.animation_state:
+            if changed:
+                self.background = render_frame(Image.new("RGBA", (84,76)), caption, caption_left)
+            frame = self.background.copy()
+            face = animated_character(*animation) if animation is not None else self.small_art
+            frame.alpha_composite(face, (274 if caption_left else 2,4))
+            data = premultiplied_bgra(frame)
             ctypes.memmove(self.pixels, data, len(data))
-            point, source, size = W.POINT(self.x, self.y), W.POINT(0, 0), W.SIZE(self.width, self.height)
+            visible_size = (self.width, self.height) if caption else (88, 80)
+            point, source, size = W.POINT(self.x, self.y), W.POINT(0, 0), W.SIZE(*visible_size)
             blend = _Blend(0, 0, 255, 1)  # AC_SRC_OVER, AC_SRC_ALPHA
             if not self.user.UpdateLayeredWindow(self.hwnd, None, ctypes.byref(point), ctypes.byref(size),
                                                  self.dc, ctypes.byref(source), 0, ctypes.byref(blend), 2):
                 raise ctypes.WinError(ctypes.get_last_error())
             self.caption = caption
+            self.caption_left = caption_left
+            self.animation_state = animation
         else:
             # NOACTIVATE | NOSIZE; preserve click-through while following the pointer.
             self.user.SetWindowPos(self.hwnd, W.HWND(-1), self.x, self.y, 0, 0, 0x11)

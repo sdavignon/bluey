@@ -47,6 +47,13 @@ jobs:
           python -m pip install pyinstaller==6.15.0
           python -m bluey.artwork
           python -m PyInstaller --clean --noconfirm --windowed --onedir --name Bluey --icon bluey/assets/bluey.ico --add-data "bluey/assets;bluey/assets" --paths . --collect-submodules keyring.backends --collect-submodules pywinauto --hidden-import comtypes --hidden-import pyautogui --hidden-import pystray._win32 launcher.py
+      - name: Package temporary customer client
+        working-directory: Windows
+        run: python -m PyInstaller --clean --noconfirm --windowed --onefile --name Bluey-Customer --icon bluey/assets/bluey.ico --add-data "bluey/assets;bluey/assets" --paths . --collect-submodules keyring.backends --collect-submodules pywinauto --hidden-import comtypes --hidden-import pyautogui --hidden-import pystray._win32 launcher_customer.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bluey-Customer
+          path: Windows/dist/Bluey-Customer.exe
       - uses: actions/upload-artifact@v4
         with:
           name: Bluey-Windows

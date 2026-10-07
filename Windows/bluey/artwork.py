@@ -4,10 +4,11 @@ Run `python -m bluey.artwork` before packaging. No external image service.
 """
 from pathlib import Path
 import math
+from functools import lru_cache
 from PIL import Image, ImageChops, ImageDraw
 
 
-def character():
+def character(face=True):
     image = Image.new("RGBA", (844, 760))
     mask = Image.new("L", image.size)
     points = [(438.4, 44)]
@@ -50,14 +51,64 @@ def character():
             t=n/40; u=1-t
             brow.append((ex+side*6-38*u*u+38*t*t,ey-119+6*u*u-24*u*t+6*t*t))
         draw.line(brow,fill=navy,width=14,joint="curve")
+        if not face:
+            continue
         draw.ellipse((ex-95,ey-95,ex+95,ey+95),fill="white")
         px=ex-side*3; py=ey-12; r=46*1.12
         draw.ellipse((px-r,py-r,px+r,py+r),fill=ink)
         for dx,dy,rr in [(-.30,-.44,.28),(.40,.34,.12)]:
             cx=px+r*dx; cy=py+r*dy; cr=r*rr
             draw.ellipse((cx-cr,cy-cr,cx+cr,cy+cr),fill="white")
-    draw.ellipse((392,316,452,354),fill=navy)
+    if face:
+        draw.ellipse((392,316,452,354),fill=navy)
     return image
+
+
+@lru_cache(maxsize=1)
+def animation_base():
+    # Original source geometry is rasterized once, never in the animation loop.
+    asset = Path(__file__).parent / "assets" / "bluey-animation-base.png"
+    if asset.exists():
+        with Image.open(asset) as image:
+            return image.convert("RGBA")
+    return character(face=False).resize((168, 152), Image.Resampling.LANCZOS)
+
+
+def animated_character(gaze=(0, 0), talk=0, closed=0):
+    def clamp(value, low, high):
+        return max(low, min(high, value)) if math.isfinite(value) else 0
+    gx, gy = (clamp(float(v), -1, 1) for v in gaze)
+    talk, closed = clamp(float(talk), 0, 1), clamp(float(closed), 0, 1)
+    length = max(1, math.hypot(gx, gy))
+    image = animation_base().copy()
+    draw = ImageDraw.Draw(image)
+    sx, sy = 168/844, 152/760
+    def oval(painter, box, color):
+        painter.ellipse(tuple(v*(sx if n%2 == 0 else sy) for n,v in enumerate(box)), fill=color)
+    for side in (-1, 1):
+        ex, ey = 422+side*130, 201
+        opened = max(.06, 1-closed)*(1-talk*.12)
+        box = (ex-95, ey-95*opened, ex+95, ey+95*opened)
+        oval(draw, box, "white")
+        if opened <= .2:
+            continue
+        eye = Image.new("RGBA", image.size)
+        ed = ImageDraw.Draw(eye)
+        px, py, r = ex+gx/length*50-side*3, ey+gy/length*50*opened, 46*1.12
+        oval(ed, (px-r,py-r,px+r,py+r), "#17151f")
+        for dx,dy,rr in [(-.30,-.44,.28),(.40,.34,.12)]:
+            cx,cy,cr = px+r*dx, py+r*dy, r*rr
+            oval(ed, (cx-cr,cy-cr,cx+cr,cy+cr), "white")
+        mask = Image.new("L", image.size)
+        oval(ImageDraw.Draw(mask), box, 255)
+        eye.putalpha(ImageChops.multiply(eye.getchannel("A"), mask))
+        image.alpha_composite(eye)
+    draw = ImageDraw.Draw(image)
+    nw, nh, ny = 60-talk*8, 38+talk*34, 316-talk*6
+    oval(draw, (422-nw/2,ny,422+nw/2,ny+nh), "#1c1f66")
+    if talk > .25:
+        oval(draw, (422-nw*.28,ny+nh*.62,422+nw*.28,ny+nh*.92), "#e58bc4")
+    return image.resize((84,76), Image.Resampling.LANCZOS)
 
 
 def build():
@@ -65,6 +116,7 @@ def build():
     target.mkdir(exist_ok=True)
     art=character()
     art.save(target / "bluey.png")
+    character(face=False).resize((168,152), Image.Resampling.LANCZOS).save(target / "bluey-animation-base.png")
     # Square phone-style crop keeps the expressive face readable at taskbar size.
     icon=Image.new("RGBA",(844,844),(13,14,24,255))
     face=art.crop((92,0,752,660)).resize((844,844),Image.Resampling.LANCZOS)

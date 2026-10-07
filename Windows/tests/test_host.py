@@ -4,7 +4,7 @@ import json
 import socket
 import unittest
 from PIL import Image
-from bluey.host import Host, session_config
+from bluey.host import Host, session_config, phone_credentials_only
 from bluey.protocol import Decoder, encode
 
 
@@ -58,6 +58,39 @@ class HostTests(unittest.TestCase):
         result = self.request(command='realtimeToken')
         self.assertEqual(result['text'], 'ephemeral-token')
         self.assertNotIn('desktop-only-key', json.dumps(result))
+
+    def test_realtime_config_never_reads_or_mints_credentials(self):
+        from unittest.mock import Mock
+        self.host.key = Mock(side_effect=AssertionError('must not access credentials'))
+        self.host.token_factory = Mock(side_effect=AssertionError('must not mint token'))
+        enabled = [False]
+        self.host.config_factory = lambda: session_config(enabled[0], False)
+        first = self.request(command='realtimeConfig')
+        self.assertEqual(first['command'], 'realtimeConfig')
+        self.assertNotIn('click', {t['name'] for t in json.loads(first['text'])['tools']})
+        enabled[0] = True
+        second = self.request(command='realtimeConfig')
+        names = {t['name'] for t in json.loads(second['text'])['tools']}
+        self.assertIn('click', names)
+        self.assertNotIn('list_projects', names)
+        self.host.key.assert_not_called()
+        self.host.token_factory.assert_not_called()
+
+    def test_customer_token_request_directs_user_to_phone(self):
+        self.host.key = lambda: None
+        self.host.token_factory = phone_credentials_only
+        result = self.request(command='realtimeToken')
+        self.assertIsNone(result['text'])
+        self.assertIn('phone settings', result['error'])
+        self.assertNotIn('Save it once in Bluey settings', result['error'])
+
+    def test_config_failure_is_sanitized_and_connection_survives(self):
+        def broken(): raise RuntimeError('private data')
+        self.host.config_factory = broken
+        reply = self.request(command='realtimeConfig')
+        self.assertIsNone(reply['text'])
+        self.assertNotIn('private data', json.dumps(reply))
+        self.assertEqual(self.request(command='tool', tool='stop_pointing')['text'], 'Following the mouse.')
 
     def test_token_errors_distinguish_auth_from_network(self):
         import urllib.error
@@ -119,6 +152,23 @@ class HostTests(unittest.TestCase):
         result = self.request(command='notes', text='{}')
         self.assertEqual(result['command'], 'notes')
         self.assertIsNone(result['text'])
+
+    def test_phone_speaking_true_heartbeat_and_stop(self):
+        for active in (True, True, False):
+            self.client.sendall(encode({'command': 'speaking', 'active': active}))
+        # A subsequent correlated packet proves preceding state packets were consumed.
+        self.request(command='tool', tool='stop_pointing', text='{}')
+        self.assertEqual([event for event in self.events if event[0] == 'speaking'],
+                         [('speaking', True), ('speaking', True), ('speaking', False)])
+
+    def test_phone_speaking_rejects_non_boolean_state_and_face_payload(self):
+        for invalid in ('true', 'false', 1, 0, None, {}, []):
+            self.client.sendall(encode({'command': 'speaking', 'active': invalid,
+                                       'text': 'true', 'face': {'talk': 1}}))
+        self.client.sendall(encode({'command': 'speaking', 'text': 'true'}))
+        self.request(command='tool', tool='stop_pointing', text='{}')
+        self.assertFalse(any(event[0] == 'speaking' for event in self.events))
+        self.assertFalse(any(event[0] == 'face' for event in self.events))
 
     def test_face_broadcast(self):
         self.host.broadcast({'face': {'gazeX': .25, 'gazeY': -.5, 'mood': 'pointing', 'talk': 0}})

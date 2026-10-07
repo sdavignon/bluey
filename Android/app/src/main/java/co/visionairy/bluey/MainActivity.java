@@ -27,7 +27,27 @@ public final class MainActivity extends Activity {
     private String[] desktops = new String[0];
     private WifiManager.MulticastLock multicast;
     private final Handler handler = new Handler();
-    private boolean holding, resumed;
+    private boolean holding, resumed, phoneSpeaking;
+    private final Runnable speakingHeartbeat = new Runnable() {
+        @Override public void run() {
+            if (!phoneSpeaking || !resumed) return;
+            sendSpeaking(true);
+            handler.postDelayed(this, 750);
+        }
+    };
+    private void sendSpeaking(boolean active) {
+        if (link == null) return;
+        JSONObject packet = DesktopLink.json("command", "speaking");
+        DesktopLink.put(packet, "active", active);
+        link.send(packet);
+    }
+    private void syncSpeaking(boolean active) {
+        phoneSpeaking = active && resumed;
+        face.setSpeaking(phoneSpeaking);
+        handler.removeCallbacks(speakingHeartbeat);
+        sendSpeaking(phoneSpeaking);
+        if (phoneSpeaking) handler.postDelayed(speakingHeartbeat, 750);
+    }
     private final Runnable hold = () -> {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             holding = true; voice.beginAsk();
@@ -62,8 +82,19 @@ public final class MainActivity extends Activity {
         voice = new LiveVoice(this,link,new LiveVoice.Listener() {
             public void state(String text) { state.setText(text); }
             public void caption(String text) { caption.setText(text); }
-            public void speaking(boolean active) { face.setSpeaking(active); }
+            public void speaking(boolean active) { syncSpeaking(active); }
+            public void confirmProject(String name,String args,java.util.function.Consumer<Boolean> result) {
+                java.util.concurrent.atomic.AtomicBoolean answered=new java.util.concurrent.atomic.AtomicBoolean();
+                AlertDialog dialog=new AlertDialog.Builder(MainActivity.this).setTitle("Allow project request?")
+                    .setMessage(name+"\n"+args.substring(0,Math.min(args.length(),2400)))
+                    .setPositiveButton("Allow",(d,w)->{if(answered.compareAndSet(false,true))result.accept(true);})
+                    .setNegativeButton("Decline",(d,w)->{if(answered.compareAndSet(false,true))result.accept(false);})
+                    .setOnCancelListener(d->{if(answered.compareAndSet(false,true))result.accept(false);}).create();
+                dialog.show();
+                handler.postDelayed(()->{if(answered.compareAndSet(false,true)){dialog.dismiss();result.accept(false);}},30000);
+            }
         });
+        voice.setMeetingMode(getSharedPreferences("bluey-mode",MODE_PRIVATE).getBoolean("meeting",false));
         GestureDetector gestures = new GestureDetector(this,new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onDown(MotionEvent e) { return true; }
             @Override public boolean onDoubleTap(MotionEvent e) { handler.removeCallbacks(hold); if (voice.isAwake()) voice.sleep(); else wake(); return true; }
@@ -87,6 +118,29 @@ public final class MainActivity extends Activity {
         actions.addView(wakeButton); actions.addView(askButton);
         Button testVoice = new Button(this); testVoice.setText("Test voice");
         testVoice.setOnClickListener(v -> voice.testSpeech()); actions.addView(testVoice);
+        Button phoneSettings=new Button(this); phoneSettings.setText("Phone settings");
+        phoneSettings.setOnClickListener(v->{
+            voice.sleep();
+            PhoneIdentity identity=new PhoneIdentity(this);
+            new AlertDialog.Builder(this).setTitle("Phone settings")
+                .setItems(new String[]{"Activate prepared credentials", "Test phone connections", "Meeting mode: "+(voice.isMeetingMode()?"On":"Off")},(d,w)->{
+                    if(w==0) {
+                        try {identity.activatePrepared();caption.setText("Credentials saved on this phone. Reconnect voice to use them.");}
+                        catch(Exception e){caption.setText("No valid prepared phone profile. Run trusted-PC provisioning first.");}
+                    } else if(w==1) {
+                        caption.setText("Testing phone connections…");
+                        new Thread(()->{
+                            String result=identity.testConnections();
+                            handler.post(()->caption.setText(result));
+                        },"phone-connection-test").start();
+                    } else {
+                        boolean enabled=!voice.isMeetingMode(); voice.setMeetingMode(enabled);
+                        getSharedPreferences("bluey-mode",MODE_PRIVATE).edit().putBoolean("meeting",enabled).apply();
+                        caption.setText(enabled?"Meeting mode ready. Let participants know before waking Bluey. Ask now requests a recap; sleep ends listening.":"Companion mode ready.");
+                    }
+                }).setNegativeButton("Close",null).show();
+        }); actions.addView(phoneSettings);
+        try {new PhoneIdentity(this).prepare();} catch(Exception e){caption.setText("Phone secure storage unavailable.");}
         root.addView(actions, new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.BOTTOM | android.view.Gravity.START));
         // Keep the face unobstructed like iPhone; explicit controls remain one tap away.
         actions.setVisibility(View.GONE); pairing.setVisibility(View.GONE);
@@ -138,6 +192,6 @@ public final class MainActivity extends Activity {
             }).setNegativeButton("Cancel",null).show();
     }
     @Override protected void onResume() { super.onResume(); resumed=true; if(multicast!=null) multicast.acquire(); link.start(); }
-    @Override protected void onPause() { resumed=false; handler.removeCallbacks(hold); holding=false; voice.sleep(); link.stop(); if(multicast!=null && multicast.isHeld()) multicast.release(); super.onPause(); }
-    @Override protected void onDestroy() { voice.destroy(); link.destroy(); super.onDestroy(); }
+    @Override protected void onPause() { resumed=false; handler.removeCallbacks(hold); holding=false; voice.sleep(); syncSpeaking(false); link.stop(); if(multicast!=null && multicast.isHeld()) multicast.release(); super.onPause(); }
+    @Override protected void onDestroy() { voice.destroy(); syncSpeaking(false); handler.removeCallbacks(speakingHeartbeat); handler.removeCallbacks(hold); link.destroy(); super.onDestroy(); }
 }

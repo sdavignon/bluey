@@ -10,11 +10,12 @@ import time
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 
-from .host import Host, mint_token
+from .host import Host, mint_token, session_config, phone_credentials_only
 from .network import pairing_addresses
 
 
 def main():
+    customer = "--customer" in sys.argv[1:]
     if sys.platform != "win32":
         raise SystemExit("The desktop UI requires Windows 10/11. Protocol tests run on Linux.")
     import pyautogui
@@ -50,6 +51,8 @@ def main():
     pending_tracker_confirmation = None
     point = None
     caption = ""
+    phone_speaking = False
+    speaking_updated = 0.0
     running = False
     pairing_generation = 0
     zeroconf = info = host = None
@@ -69,10 +72,15 @@ def main():
         return ImageGrab.grab(all_screens=False), cursor()
 
     def key():
+        if customer:
+            return None
         return keyring.get_password("Bluey", "openai")
 
     key_status = tk.StringVar()
     def refresh_key_status():
+        if customer:
+            key_status.set("Customer PC\nCredentials stay on your phone")
+            return
         try:
             key_status.set("OpenAI key saved · reused every run" if key() else "No OpenAI key saved yet")
         except Exception:
@@ -80,6 +88,8 @@ def main():
     refresh_key_status()
 
     def set_key():
+        if customer:
+            return
         value = simpledialog.askstring("OpenAI key", "Stored in Windows Credential Manager.", show="*", parent=root)
         if value and value.strip():
             try:
@@ -129,6 +139,8 @@ def main():
             return "Computer control stopped at a failsafe corner."
 
     def run_tracker(name, args):
+        if customer:
+            return "Project Manager credentials and requests are handled on the phone."
         from . import project_tracker
         if not running or not project_tracker.is_connected():
             return "Project Manager is not connected."
@@ -145,6 +157,8 @@ def main():
         return "Project Manager request cancelled or timed out."
 
     def tracker_connected():
+        if customer:
+            return False
         from . import project_tracker
         return project_tracker.is_connected()
 
@@ -174,8 +188,9 @@ def main():
             if not addresses:
                 raise RuntimeError("No LAN IPv4 address found")
             host = Host(screen, lambda kind, value: events.put((kind, value)), key,
-                        token_factory=lambda value: mint_token(value, enabled.is_set(), tracker_enabled=tracker_connected()),
-                        action=run_action, tracker=run_tracker)
+                        token_factory=phone_credentials_only if customer else lambda value: mint_token(value, enabled.is_set(), tracker_enabled=tracker_connected()),
+                        action=run_action, tracker=None if customer else run_tracker,
+                        config_factory=lambda: session_config(enabled.is_set(), False))
             port = host.start(port=8765)
             zeroconf = Zeroconf()
             info = ServiceInfo("_googly._tcp.local.", socket.gethostname() + "._googly._tcp.local.",
@@ -191,8 +206,9 @@ def main():
             status.set("Port 8765 is busy. Quit the other Bluey instance and try again." if isinstance(error, OSError) and getattr(error, "winerror", None) == 10048 else f"Pairing failed ({type(error).__name__}). Check your network.")
 
     def stop():
-        nonlocal running, host, zeroconf, info, caption, point, pairing_generation
+        nonlocal running, host, zeroconf, info, caption, point, pairing_generation, phone_speaking
         running = False
+        phone_speaking = False
         pairing_generation += 1
         enabled.clear()
         stopped.set()
@@ -215,7 +231,7 @@ def main():
             host.broadcast({"command": name})
 
     def tick():
-        nonlocal point, caption, pending_confirmation, pending_tracker_confirmation
+        nonlocal point, caption, pending_confirmation, pending_tracker_confirmation, phone_speaking, speaking_updated
         try:
             while True:
                 kind, value = events.get_nowait()
@@ -278,9 +294,13 @@ def main():
                     caption = value
                 elif kind == "phone":
                     status.set("Connected: " + value)
+                elif kind == "speaking":
+                    phone_speaking = value is True
+                    speaking_updated = time.monotonic()
                 elif kind == "error":
                     status.set(value)
                 elif kind == "disconnect" and host and not host.clients:
+                    phone_speaking = False
                     status.set("Waiting for a phone.")
                     caption, point = "", None
         except queue.Empty:
@@ -303,10 +323,14 @@ def main():
         if running and host:
             width, height = root.winfo_screenwidth(), root.winfo_screenheight()
             mouse = cursor()
-            x, y = (point[0] * width / 1000, point[1] * height / 1000) if point else mouse
-            overlay.update(max(0, min(width-360, int(x)+12)), max(0, min(height-160, int(y)+12)), caption[:500])
-            host.broadcast({"face": {"gazeX": max(-1, min(1, mouse[0]*2/width-1)),
-                                     "gazeY": max(-1, min(1, mouse[1]*2/height-1)),
+            # Tool coordinates still target the primary display, including grid 1000.
+            x, y = (min(width-1, point[0] * width / 1000), min(height-1, point[1] * height / 1000)) if point else mouse
+            gx, gy = max(-1, min(1, mouse[0]*2/width-1)), max(-1, min(1, mouse[1]*2/height-1))
+            overlay.follow(x, y, caption[:500], gaze=(gx,gy),
+                           speaking=phone_speaking and time.monotonic()-speaking_updated < 3,
+                           animate=animate_character.get())
+            host.broadcast({"face": {"gazeX": gx,
+                                     "gazeY": gy,
                                      "mood": "pointing" if point else "listening", "talk": 0}})
         root.after(50, tick)
 
@@ -341,7 +365,10 @@ def main():
     button(phone_row, "Sleep phone", lambda: command("sleep")).pack(side="left", fill="x", expand=True, padx=(6, 0))
     key_row = tk.Frame(page, bg="#0d0e18")
     key_row.pack(fill="x", pady=(0, 16))
-    button(key_row, "OpenAI key…", set_key).pack(side="left", padx=(0, 12))
+    key_button = button(key_row, "Credentials on phone" if customer else "OpenAI key…", set_key)
+    if customer:
+        key_button.configure(state="disabled")
+    key_button.pack(side="left", padx=(0, 12))
     tk.Label(key_row, textvariable=key_status, bg="#0d0e18", fg="#a2abc9", justify="left", font=("Segoe UI", 9)).pack(side="left")
     safety = tk.Frame(page, bg="#191d32", padx=14, pady=10)
     safety.pack(fill="x")
@@ -350,10 +377,19 @@ def main():
                    command=toggle_control, bg="#191d32", fg="#e9edff", activebackground="#191d32", activeforeground="white",
                    selectcolor="#2b2f8f").pack(anchor="w")
     tk.Label(safety, text="Every action needs your approval.", bg="#191d32", fg="#a2abc9", font=("Segoe UI", 9)).pack(anchor="w", padx=4)
+    animate_character = tk.BooleanVar(value=True)
+    tk.Checkbutton(safety, text="Animate character · eyes, blink and speech", variable=animate_character,
+                   bg="#191d32", fg="#e9edff", activebackground="#191d32", activeforeground="white",
+                   selectcolor="#2b2f8f").pack(anchor="w", pady=(6,0))
     tk.Label(page, text="Emergency stop  ·  Ctrl+Alt+S or move to a screen corner", bg="#0d0e18", fg="#a2abc9", font=("Segoe UI", 9)).pack(pady=(14, 0))
 
     def open_projects():
         try:
+            if customer:
+                import webbrowser
+                from .project_tracker import DEFAULT_SHEET_URL
+                webbrowser.open(DEFAULT_SHEET_URL)
+                return
             from .project_tracker import open_project_manager
             open_project_manager()
         except Exception:
@@ -366,6 +402,10 @@ def main():
         toggle_control()
 
     def configure_sheets():
+        if customer:
+            # Opening the default sheet needs no local OAuth/settings access.
+            open_projects()
+            return
         lifecycle.show()
         try:
             from .project_tracker import configure
