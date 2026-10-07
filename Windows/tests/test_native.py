@@ -1,7 +1,6 @@
 """Actual Windows UI checks. Skipped explicitly on Linux; run in Windows CI."""
 import ctypes
 from ctypes import wintypes
-import os
 import subprocess
 import sys
 import time
@@ -21,8 +20,23 @@ class NativeWindowsTests(unittest.TestCase):
 
     def test_control_window_launches(self):
         user32 = ctypes.windll.user32
-        user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
-        user32.FindWindowW.restype = wintypes.HWND
+        enum_callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows.argtypes = [enum_callback, wintypes.LPARAM]
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        def control_windows():
+            matches = set()
+            @enum_callback
+            def visit(hwnd, _):
+                if user32.IsWindowVisible(hwnd):
+                    title = ctypes.create_unicode_buffer(256)
+                    user32.GetWindowTextW(hwnd, title, len(title))
+                    if title.value == 'Bluey':
+                        matches.add(hwnd)
+                return True
+            user32.EnumWindows(visit, 0)
+            return matches
+        existing = control_windows()
         process = subprocess.Popen([sys.executable, '-m', 'bluey.app'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             deadline = time.monotonic() + 20
@@ -31,7 +45,8 @@ class NativeWindowsTests(unittest.TestCase):
                 if process.poll() is not None:
                     _, error = process.communicate()
                     self.fail('Bluey exited before creating its window: ' + error.decode(errors='replace'))
-                handle = user32.FindWindowW(None, 'Bluey')
+                # Tk overlays can share a title; ignore hidden and unrelated windows.
+                handle = next(iter(control_windows() - existing), None)
                 if handle:
                     break
                 time.sleep(.1)
