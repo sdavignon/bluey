@@ -42,7 +42,7 @@ public final class MainActivity extends Activity {
         LinearLayout labels = new LinearLayout(this); labels.setOrientation(LinearLayout.VERTICAL); labels.setPadding(24,12,24,12);
         connection = label("Looking for a desktop…"); state = label("Following · double tap to wake"); caption = label("");
         labels.addView(connection); labels.addView(state); labels.addView(caption);
-        root.addView(labels, new FrameLayout.LayoutParams(-1,-2,android.view.Gravity.TOP));
+        root.addView(labels, new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.TOP | android.view.Gravity.START));
         Button pairing = new Button(this); pairing.setText(R.string.pair_desktop);
         FrameLayout.LayoutParams buttonParams = new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.BOTTOM | android.view.Gravity.END);
         root.addView(pairing,buttonParams); pairing.setOnClickListener(v -> pairing());
@@ -84,11 +84,21 @@ public final class MainActivity extends Activity {
         askButton.setOnClickListener(v -> { if (voice.isAwake()) { voice.beginAsk(); voice.endAsk(); } else wake(); });
         actions.addView(wakeButton); actions.addView(askButton);
         root.addView(actions, new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.BOTTOM | android.view.Gravity.START));
+        // Keep the face unobstructed like iPhone; explicit controls remain one tap away.
+        actions.setVisibility(View.GONE); pairing.setVisibility(View.GONE);
+        Button menu = new Button(this); menu.setText("\u2022\u2022\u2022");
+        menu.setContentDescription("Show or hide Bluey controls");
+        menu.setTextColor(Color.WHITE); menu.setBackgroundColor(Color.TRANSPARENT);
+        root.addView(menu, new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.TOP | android.view.Gravity.END));
+        menu.setOnClickListener(v -> {
+            int visibility = actions.getVisibility()==View.VISIBLE ? View.GONE : View.VISIBLE;
+            actions.setVisibility(visibility); pairing.setVisibility(visibility);
+        });
         WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
         if (wifi != null) { multicast=wifi.createMulticastLock("Bluey discovery"); multicast.setReferenceCounted(false); }
     }
     private TextView label(String text) {
-        TextView view = new TextView(this); view.setText(text); view.setTextColor(Color.WHITE); view.setTextSize(16); view.setMaxLines(4); return view;
+        TextView view = new TextView(this); view.setText(text); view.setTextColor(Color.WHITE); view.setTextSize(11); view.setMaxLines(4); view.setMaxWidth(getResources().getDisplayMetrics().widthPixels-180); view.setShadowLayer(3,0,1,Color.BLACK); return view;
     }
     private void wake() {
         if (!resumed) return;
