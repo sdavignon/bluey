@@ -21,6 +21,8 @@ def main():
     import pyautogui
     from .control import ComputerControl
     from .text_input import UnicodeTextWriter
+    from .focus_check import FocusChecker
+    from .approval import bubble_bounds
     from .tray import Tray, WindowLifecycle
     from .overlay import Overlay
     from PIL import Image, ImageGrab, ImageTk
@@ -104,18 +106,10 @@ def main():
             except Exception:
                 messagebox.showerror("Key storage", "Windows Credential Manager could not save the key.")
 
+    focus_checker = FocusChecker(timeout=2.5)
+
     def password_check():
-        try:
-            import comtypes
-            from pywinauto.uia_defines import IUIA
-            comtypes.CoInitialize()
-            try:
-                focused = IUIA().iuia.GetFocusedElement()
-                return bool(focused.CurrentIsPassword) if focused else None
-            finally:
-                comtypes.CoUninitialize()
-        except Exception:
-            return None
+        return focus_checker.check()
 
     def confirm(name, args):
         done = threading.Event()
@@ -132,11 +126,14 @@ def main():
         return False
 
     control = ComputerControl(pyautogui, password_check, confirm, enabled.is_set, stopped.is_set,
-                              text_writer=UnicodeTextWriter())
+                              text_writer=UnicodeTextWriter(),
+                              progress=lambda message: events.put(("control_result", message)))
 
     def run_action(name, args):
         try:
             outcome = control.run(name, args)
+            if outcome.startswith("Cannot verify"):
+                outcome += " Field check: " + focus_checker.status + ". Click the editor and retry."
         except pyautogui.FailSafeException:
             enabled.clear()
             stopped.set()
@@ -282,13 +279,25 @@ def main():
                         continue
                     dialog = tk.Toplevel(root)
                     pending_confirmation = (dialog, done)
-                    dialog.title("Bluey action confirmation")
+                    dialog.title("Bluey approval bubble")
+                    dialog.configure(bg="#191d32", highlightbackground="#a9bcff", highlightthickness=2)
+                    dialog.overrideredirect(True)
                     dialog.attributes("-topmost", True)
-                    tk.Label(dialog, text=f"Allow {name}?\n{str(args)[:2100]}", wraplength=450).pack(padx=20, pady=20)
+                    actions = tk.Frame(dialog, bg="#191d32")
+                    actions.pack(side="bottom", fill="x")
+                    header = tk.Frame(dialog, bg="#191d32")
+                    header.pack(fill="x", padx=12, pady=(8,0))
+                    tk.Label(header, image=portrait, bg="#191d32").pack(side="left")
+                    tk.Label(header, text=f"Bluey · Allow {name}?", bg="#191d32", fg="white", wraplength=300).pack(side="left", padx=8)
+                    preview = tk.Text(dialog, height=5, wrap="word", bg="#191d32", fg="white", relief="flat", font=("Segoe UI",10))
+                    preview.insert("1.0", str(args)[:2100]); preview.configure(state="disabled")
+                    preview.pack(fill="both", expand=True, padx=16)
                     def finish(allow=False, window=dialog, completion=done, answer=result, target=foreground, request_id=request_generation):
                         nonlocal pending_confirmation
                         window.destroy()
                         pending_confirmation = None
+                        if running:
+                            overlay.show()
                         if completion.is_set():
                             return
                         if not allow or not enabled.is_set() or stopped.is_set():
@@ -313,9 +322,25 @@ def main():
                                     completion.set()
                             root.after(80, settled)
                         root.after(80, restore)
-                    tk.Button(dialog, text="Allow", command=lambda fn=finish: fn(True)).pack(side="left", padx=20, pady=10)
-                    tk.Button(dialog, text="Decline", command=finish).pack(side="right", padx=20, pady=10)
+                    tk.Button(actions, text="Allow", command=lambda fn=finish: fn(True)).pack(side="left", padx=20, pady=10)
+                    tk.Button(actions, text="Decline", command=finish).pack(side="right", padx=20, pady=10)
                     dialog.protocol("WM_DELETE_WINDOW", finish)
+                    mouse = cursor()
+                    px, py, pw, ph = bubble_bounds((overlay.x, overlay.y), overlay.monitor_bounds(*mouse))
+                    dialog.geometry(f"{pw}x{ph}")
+                    dialog.update_idletasks()
+                    # Native positioning preserves negative virtual-desktop coordinates.
+                    handle = user32.GetParent(dialog.winfo_id()) or dialog.winfo_id()
+                    if not overlay.user.SetWindowPos(handle, wintypes.HWND(-1), px, py, pw, ph, 0x40):
+                        done.set()
+                        dialog.destroy()
+                        pending_confirmation = None
+                        status.set("Could not show Bluey's approval bubble. Action cancelled.")
+                        continue
+                    overlay.hide()
+                    status.set("Waiting for approval beside Bluey.")
+                    if host:
+                        host.broadcast({"command":"controlStatus", "text":"Waiting for approval beside Bluey on the PC."})
                 elif kind == "stopped":
                     control_flag.set(False)
                     status.set(value)
@@ -334,6 +359,8 @@ def main():
                     status.set(value)
                 elif kind == "control_result":
                     status.set(value)
+                    if host:
+                        host.broadcast({"command":"controlStatus", "text":value})
                 elif kind == "disconnect" and host and not host.clients:
                     phone_speaking = False
                     pairing_generation += 1
@@ -354,6 +381,8 @@ def main():
             done.set()
             dialog.destroy()
             pending_confirmation = None
+            if running:
+                overlay.show()
         if pending_tracker_confirmation and (pending_tracker_confirmation[1].is_set() or not running):
             dialog, done = pending_tracker_confirmation
             done.set()
@@ -470,6 +499,7 @@ def main():
         try:
             stop()
         finally:
+            focus_checker.close()
             overlay.close()
     lifecycle = WindowLifecycle(root, tray, cleanup)
     footer = tk.Frame(page, bg="#0d0e18")

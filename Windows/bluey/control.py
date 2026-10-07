@@ -55,16 +55,19 @@ def shortcut(value):
 
 
 class ComputerControl:
-    def __init__(self, gui, password_check, confirm, enabled, cancelled=None, text_writer=None):
+    def __init__(self, gui, password_check, confirm, enabled, cancelled=None, text_writer=None, progress=None):
         self.gui, self.password_check, self.confirm, self.enabled = gui, password_check, confirm, enabled
         self.cancelled = cancelled or (lambda: False)
         self.text_writer = text_writer
+        self.progress = progress or (lambda _: None)
         self.lock = threading.Lock()
         gui.FAILSAFE = True
         gui.PAUSE = 0.15
 
     def run(self, name, args):
-        with self.lock:
+        if not self.lock.acquire(blocking=False):
+            return "Another computer action is still running. Wait for its result before retrying."
+        try:
             if not self.enabled() or self.cancelled():
                 return "Computer control is off. Enable it in the desktop app."
             # Validate everything before showing a prompt or doing anything.
@@ -99,14 +102,17 @@ class ComputerControl:
                     raise ValueError("App is not on the allowlist")
             else:
                 raise ValueError("Unsupported action")
+            self.progress("Waiting for your approval on the PC.")
             if not self.confirm(name, args):
                 return "The user declined or cancelled this action."
             if not self.enabled() or self.cancelled():
                 return "Computer control stopped."
             if name in ("type_text", "press_keys"):
                 # Unknown focus or UI Automation failure is a refusal, not permission to type.
+                self.progress("Checking the focused field before typing.")
                 if self.password_check() is not False:
                     return "Cannot verify a non-password field. Ask the user to enter this themselves."
+            self.progress("Applying the approved computer action.")
             previous = self.gui.position()
             try:
                 if name == "click": self.gui.click(*target)
@@ -138,3 +144,5 @@ class ComputerControl:
                 if not self.cancelled() and tuple(self.gui.position()) not in self.gui.FAILSAFE_POINTS:
                     self.gui.moveTo(*previous)
             return "Action completed. Call look_at_screen to verify the result before the next action."
+        finally:
+            self.lock.release()

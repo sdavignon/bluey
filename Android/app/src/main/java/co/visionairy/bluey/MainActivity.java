@@ -74,6 +74,7 @@ public final class MainActivity extends Activity {
                 switch (packet.optString("command")) {
                     case "wake": wake(); break;
                     case "sleep": voice.sleep(); break;
+                    case "controlStatus": state.setText(packet.optString("text").substring(0,Math.min(300,packet.optString("text").length()))); break;
                 }
             }
             public void status(String text, boolean connected) { connection.setText(text); if (!connected && voice != null && voice.isAwake()) voice.sleep(); }
