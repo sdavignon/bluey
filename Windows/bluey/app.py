@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog
 
 from .host import Host, mint_token
+from .network import pairing_addresses
 
 
 def main():
@@ -19,6 +20,7 @@ def main():
     import pyautogui
     from .control import ComputerControl
     from .tray import Tray, WindowLifecycle
+    from .overlay import Overlay
     from PIL import Image, ImageGrab, ImageTk
     import keyring
     from zeroconf import ServiceInfo, Zeroconf
@@ -41,7 +43,6 @@ def main():
     root.iconbitmap(str(assets / "bluey.ico"))
     art = Image.open(assets / "bluey.png")
     portrait = ImageTk.PhotoImage(art.resize((116, 104), Image.Resampling.LANCZOS))
-    companion = ImageTk.PhotoImage(art.resize((84, 76), Image.Resampling.LANCZOS))
     events = queue.Queue()
     enabled = threading.Event()
     stopped = threading.Event()
@@ -55,20 +56,7 @@ def main():
     address = tk.StringVar(value="")
     status = tk.StringVar(value="Start pairing on a trusted private Wi-Fi network.")
 
-    overlay = tk.Toplevel(root)
-    overlay.title("Bluey overlay")
-    overlay.overrideredirect(True)
-    overlay.attributes("-topmost", True)
-    overlay.configure(bg="#ff00ff")
-    overlay.attributes("-transparentcolor", "#ff00ff")
-    canvas = tk.Canvas(overlay, width=360, height=160, bg="#ff00ff", highlightthickness=0)
-    canvas.pack()
-    canvas.create_image(2, 4, image=companion, anchor="nw")
-    bubble = canvas.create_text(99, 16, anchor="nw", width=249, text="", fill="#17151f",
-                                font=("Segoe UI", 11))
-    background = canvas.create_rectangle(92, 8, 358, 152, fill="#eef0ff", outline="")
-    canvas.tag_lower(background)
-    overlay.withdraw()
+    overlay = Overlay(art)
 
     def cursor():
         class POINT(ctypes.Structure):
@@ -182,8 +170,7 @@ def main():
             return
         try:
             # Enumerate usable IPv4 interfaces; do not rely on external Internet connectivity.
-            addresses = sorted({entry[4][0] for entry in socket.getaddrinfo(socket.gethostname(), None,
-                                socket.AF_INET, socket.SOCK_STREAM) if not entry[4][0].startswith("127.")})
+            addresses = pairing_addresses()
             if not addresses:
                 raise RuntimeError("No LAN IPv4 address found")
             host = Host(screen, lambda kind, value: events.put((kind, value)), key,
@@ -198,12 +185,7 @@ def main():
             running = True
             address.set(f"{', '.join(addresses)} : {port}")
             status.set("Pairing started. Choose this desktop on your phone.")
-            overlay.deiconify()
-            # Make the overlay click-through so it never intercepts the user's pointer.
-            root.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(overlay.winfo_id())
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
-            ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | 0x20 | 0x80000 | 0x08000000)
+            overlay.show()
         except Exception as error:
             stop()
             status.set("Port 8765 is busy. Quit the other Bluey instance and try again." if isinstance(error, OSError) and getattr(error, "winerror", None) == 10048 else f"Pairing failed ({type(error).__name__}). Check your network.")
@@ -224,7 +206,7 @@ def main():
             zeroconf.close()
             zeroconf = info = None
         caption, point = "", None
-        overlay.withdraw()
+        overlay.hide()
         status.set("Pairing stopped.")
         address.set("")
 
@@ -322,9 +304,7 @@ def main():
             width, height = root.winfo_screenwidth(), root.winfo_screenheight()
             mouse = cursor()
             x, y = (point[0] * width / 1000, point[1] * height / 1000) if point else mouse
-            overlay.geometry(f"360x160+{max(0, min(width-360, int(x)+12))}+{max(0, min(height-160, int(y)+12))}")
-            canvas.itemconfigure(bubble, text=caption[:500])
-            canvas.itemconfigure(background, state="normal" if caption else "hidden")
+            overlay.update(max(0, min(width-360, int(x)+12)), max(0, min(height-160, int(y)+12)), caption[:500])
             host.broadcast({"face": {"gazeX": max(-1, min(1, mouse[0]*2/width-1)),
                                      "gazeY": max(-1, min(1, mouse[1]*2/height-1)),
                                      "mood": "pointing" if point else "listening", "talk": 0}})
@@ -407,7 +387,12 @@ def main():
                  "sleep": lambda: command("sleep"), "control": tray_control,
                  "quit": lambda: lifecycle.quit()},
                 pairing=lambda: running, control=enabled.is_set, failed=tray_failed)
-    lifecycle = WindowLifecycle(root, tray, stop)
+    def cleanup():
+        try:
+            stop()
+        finally:
+            overlay.close()
+    lifecycle = WindowLifecycle(root, tray, cleanup)
     footer = tk.Frame(page, bg="#0d0e18")
     footer.pack(fill="x", pady=(12, 0))
     button(footer, "Open Project Manager", open_projects).pack(side="left")

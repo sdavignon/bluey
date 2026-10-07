@@ -29,6 +29,7 @@ final class DesktopLink {
         void services(String[] names);
     }
     private final NsdManager nsd;
+    private final android.content.SharedPreferences preferences;
     private final Listener listener;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newCachedThreadPool();
@@ -46,14 +47,17 @@ final class DesktopLink {
     DesktopLink(Context context, Listener listener) {
         nsd = (NsdManager) context.getSystemService(Context.NSD_SERVICE);
         this.listener = listener;
-        preferred = context.getSharedPreferences("bluey", 0).getString("desktop", null);
+        preferences = context.getSharedPreferences("bluey", 0);
+        preferred = preferences.getString("desktop", null);
     }
     void start() {
         if (active) return;
         active = true;
+        String manualAddress = preferences.getString("manualAddress", null);
+        if (manualAddress != null) connect(manualAddress, preferences.getInt("manualPort", 8765), manualAddress);
         int run = ++discoveryGeneration;
         discovery = new NsdManager.DiscoveryListener() {
-            public void onDiscoveryStarted(String type) { ui.post(() -> { if (run == discoveryGeneration) listener.status("Looking for a desktop on this Wi-Fi…", false); }); }
+            public void onDiscoveryStarted(String type) { ui.post(() -> { if (run == discoveryGeneration && !connected && !connecting) listener.status("Looking for a desktop on this Wi-Fi…", false); }); }
             public void onServiceFound(NsdServiceInfo service) { ui.post(() -> { if (run == discoveryGeneration && active) { resolveQueue.add(service); resolveNext(run); } }); }
             public void onServiceLost(NsdServiceInfo service) { ui.post(() -> { if (run != discoveryGeneration) return; services.remove(service.getServiceName()); publishServices(); }); }
             public void onDiscoveryStopped(String type) {}
@@ -81,6 +85,7 @@ final class DesktopLink {
     private void publishServices() { listener.services(services.keySet().toArray(new String[0])); }
     void choose(Context context, String name) {
         preferred = name;
+        preferences.edit().remove("manualAddress").remove("manualPort").apply();
         context.getSharedPreferences("bluey", 0).edit().putString("desktop", name).apply();
         disconnect();
         connectBest();
@@ -91,6 +96,7 @@ final class DesktopLink {
         if (target != null && target.getHost() != null) connect(target.getHost().getHostAddress(), target.getPort(), target.getServiceName());
     }
     void manual(String address, int port) {
+        preferences.edit().putString("manualAddress", address).putInt("manualPort", port).apply();
         disconnect();
         active = true;
         connect(address, port, address);
