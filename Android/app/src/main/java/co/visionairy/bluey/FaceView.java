@@ -31,6 +31,8 @@ final class FaceView extends View {
             new int[]{0x604254d6, 0x004254d6}, new float[]{.65f, 1}, Shader.TileMode.CLAMP);
     private float targetX, targetY, targetTalk, talk;
     private String mood = "listening";
+    private boolean speaking;
+    void setSpeaking(boolean active) { speaking = active; invalidate(); }
     private long lastFrame, lastPacket, blinkStart, nextBlink, nextHop;
 
     private static final class Spring {
@@ -88,7 +90,8 @@ final class FaceView extends View {
         float wantY=live?targetY:-.25f+(float)Math.sin(time*.43)*.2f;
         if (thinking) { wantX=.6f; wantY=-.85f; }
         gazeX.step(wantX,dt); gazeY.step(wantY,dt);
-        talk += ((live?targetTalk:0)-talk)*Math.min(1,dt*25);
+        float speechTalk = speaking ? .5f+.35f*(float)(Math.sin(time*19)*Math.sin(time*7.3)) : 0;
+        talk += (Math.max(speechTalk,live?targetTalk:0)-talk)*Math.min(1,dt*25);
         pupil.step(happy?1.2f:thinking?.9f:mood.equals("pointing")?.95f:1.12f,dt);
         brow.step(happy?16:sleepy?-10:resting?-8:mood.equals("pointing")?-4:10+talk*18,dt);
         lean.step(-gazeX.value*.045f,dt);

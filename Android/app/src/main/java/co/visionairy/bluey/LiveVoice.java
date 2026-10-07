@@ -1,6 +1,7 @@
 package co.visionairy.bluey;
 
 import android.annotation.SuppressLint;
+import android.content.Context;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
@@ -20,7 +21,7 @@ import java.util.concurrent.TimeUnit;
 
 /** Foreground-only 24 kHz PCM voice. The durable API key stays on the desktop. */
 final class LiveVoice {
-    interface Listener { void state(String state); void caption(String text); }
+    interface Listener { void state(String state); void caption(String text); void speaking(boolean active); }
     private final DesktopLink link;
     private final Listener listener;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -32,8 +33,21 @@ final class LiveVoice {
     private int generation;
     private String transcript = "";
     private final ToneGenerator chirp = new ToneGenerator(AudioManager.STREAM_MUSIC, 25);
+    private final SpeechOutput speech;
 
-    LiveVoice(DesktopLink link, Listener listener) { this.link = link; this.listener = listener; }
+    LiveVoice(Context context, DesktopLink link, Listener listener) {
+        this.link = link; this.listener = listener;
+        speech = new SpeechOutput(context, new SpeechOutput.Listener() {
+            public void speaking(boolean active) { listener.speaking(active); if (active) listener.state("Speaking"); }
+            public void error(String message) { listener.caption(message + (transcript.isEmpty() ? "" : "\n" + transcript)); }
+        });
+    }
+    void testSpeech() {
+        // Preview is local-only; finish any live session before replacing its speech.
+        if (awake) sleep();
+        speech.speak("Hi! I'm Bluey. You can hear my replies on this phone now.",
+                () -> listener.state(awake ? "Listening · hold to ask" : "Following · double tap to wake"));
+    }
     boolean isAwake() { return awake; }
     void toggle() { if (awake) sleep(); else wake(); }
     void wake() {
@@ -44,7 +58,11 @@ final class LiveVoice {
         link.request(DesktopLink.json("command", "realtimeToken"), reply -> {
             if (run != generation || !awake) return;
             String token = reply == null ? "" : reply.optString("text", "");
-            if (token.isEmpty() || token.equals("null")) { fail("Set an OpenAI key on the desktop and reconnect."); return; }
+            if (token.isEmpty() || token.equals("null")) {
+                fail(reply == null ? "Desktop not connected or did not answer. Start pairing on the PC, then reconnect." :
+                    reply.optString("error", "Desktop could not start voice. Check its connection status."));
+                return;
+            }
             Request request = new Request.Builder()
                 .url("wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1")
                 .header("Authorization", "Bearer " + token).build();
@@ -63,6 +81,7 @@ final class LiveVoice {
         });
     }
     void sleep() {
+        speech.stop();
         awake = ready = holding = askWhenReady = responding = sleepAfter = false;
         generation++;
         recording = false;
@@ -74,6 +93,7 @@ final class LiveVoice {
     }
     private void fail(String message) { sleep(); listener.caption(message); }
     void beginAsk() {
+        speech.stop();
         if (!awake) wake();
         holding = true;
         if (responding) { send(DesktopLink.json("type", "response.cancel")); responding = false; }
@@ -130,7 +150,14 @@ final class LiveVoice {
                     if (item != null && item.optString("type").equals("function_call")) calls.put(item);
                 }
                 if (calls.length() > 0) runTools(calls, 0);
-                else if (sleepAfter) sleep();
+                else if (!holding && response != null && response.optString("status").equals("completed") && !transcript.isEmpty()) {
+                    int run = generation;
+                    speech.speak(transcript, () -> {
+                        if (run != generation || !awake) return;
+                        if (sleepAfter) sleep();
+                        else listener.state(holding ? "I'm all ears" : "Listening · hold to ask");
+                    });
+                } else if (sleepAfter) sleep();
                 else listener.state(holding ? "I'm all ears" : "Listening · hold to ask");
                 break;
             case "error":
@@ -194,7 +221,7 @@ final class LiveVoice {
                 while (recording && recorder == audio) {
                     int count = audio.read(data, 0, data.length);
                     if (count < 0) throw new IllegalStateException("Audio read failed");
-                    if (count > 0) {
+                    if (count > 0 && !speech.blocksMicrophone()) {
                         JSONObject packet = DesktopLink.json("type", "input_audio_buffer.append");
                         DesktopLink.put(packet, "audio", Base64.encodeToString(data, 0, count, Base64.NO_WRAP));
                         if (target.queueSize() > 1024 * 1024 || !target.send(packet.toString())) throw new IllegalStateException("Audio connection stalled");
@@ -208,5 +235,5 @@ final class LiveVoice {
             }
         }, "Bluey microphone").start();
     }
-    void destroy() { sleep(); chirp.release(); http.dispatcher().executorService().shutdown(); http.connectionPool().evictAll(); }
+    void destroy() { sleep(); speech.shutdown(); chirp.release(); http.dispatcher().executorService().shutdown(); http.connectionPool().evictAll(); }
 }

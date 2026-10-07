@@ -26,3 +26,11 @@ Pairing is unencrypted and unauthenticated to remain compatible with the Apple p
 5. Background the phone during capture and verify Android's microphone indicator stops; return and verify voice is asleep.
 
 These hardware and API checks are separate from compilation, lint, and local framing unit tests.
+
+## Spoken replies on Android
+
+Completed replies are read aloud through Android TextToSpeech while captions remain visible. Bluey prefers an installed offline English voice and uses the phone media volume; no additional OpenAI speech request or desktop key transfer is involved. The exact voice depends on the installed Android speech engine. Set media volume using the phone buttons.
+
+Tap the top-right **•••** menu and **Test voice** to test playback without a desktop connection or API request. During playback Bluey's mouth animates and microphone frames are withheld from Realtime to avoid feeding its own speech back. Holding a new question, sleeping, leaving the app, or losing an active desktop connection stops speech. Missing voice data or playback failure leaves captions available and shows an error.
+
+Implementation references: https://developer.android.com/reference/android/speech/tts/TextToSpeech and https://developer.android.com/reference/android/speech/tts/UtteranceProgressListener .

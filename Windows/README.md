@@ -31,10 +31,21 @@ This first Windows version supports printable ASCII text, common shortcuts, prim
 ```powershell
 python -m unittest discover -s tests -v
 python -m pip install pyinstaller==6.15.0
-python -m PyInstaller --noconfirm --windowed --onedir --name Bluey --paths . --collect-submodules keyring.backends --collect-submodules pywinauto --hidden-import comtypes --hidden-import pyautogui launcher.py
+python -m bluey.artwork
+python -m PyInstaller --clean --noconfirm --windowed --onedir --name Bluey --icon bluey/assets/bluey.ico --add-data "bluey/assets;bluey/assets" --paths . --collect-submodules keyring.backends --collect-submodules pywinauto --hidden-import comtypes --hidden-import pyautogui --hidden-import pystray._win32 launcher.py
 ```
 
 The output is `dist/Bluey/Bluey.exe`; distribute the complete `dist/Bluey` directory. The Windows CI job builds this directory as an artifact. Windows runtime validation still needs actual Windows and a paired phone. The protocol, host dispatch, and automation-policy tests can run on Linux without a desktop by injecting screen/input adapters.
+
+The window, executable icon and cursor companion use the original iOS/Android character geometry and palette. `bluey/artwork.py` regenerates the checked-in PNG and multi-resolution ICO in `bluey/assets`; packaging includes both assets for standalone use.
+
+## System tray
+
+The OpenAI key is saved once in Windows Credential Manager and reused across app restarts and upgrades. The settings window reports whether a key is saved; the key button changes it, rather than requiring entry every run. Pairing uses TCP port 8765 consistently so a manually entered phone address remains valid after a restart (unless the PC address changes). Start pairing each time you launch Bluey; closing the settings window keeps an active connection running in the tray, while Quit Bluey disconnects it.
+
+Bluey creates its Windows tray icon when launched and keeps the settings window visible initially. Closing that window hides it while pairing continues. Right-click the Bluey icon (it may be inside Windows' hidden-icons menu) for **Open settings**, **Open Project Manager**, **Google Sheets…**, pairing, wake/sleep, computer control and **Quit Bluey**. Double-click opens settings. Quit closes pairing and removes the tray icon. If tray startup fails, the window stays visible and closing it quits normally. Bluey does not add itself to Windows startup.
+
+Tray controls use the same pairing warning and per-action computer-control approvals as the settings window. Every Project Manager request from the phone, including reads, requires local Allow/Decline approval before accessing the connected sheet. Requests expire after 30 seconds and are cancelled when pairing stops. Use **Google Sheets…** to configure the connection; the OpenAI key remains in **Open settings → OpenAI key…**.
 
 ## Install the Android companion over USB
 

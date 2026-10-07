@@ -1,5 +1,6 @@
 """Windows GUI. Run from Windows/: python -m bluey.app."""
 import ctypes
+from pathlib import Path
 from ctypes import wintypes
 import queue
 import socket
@@ -17,7 +18,8 @@ def main():
         raise SystemExit("The desktop UI requires Windows 10/11. Protocol tests run on Linux.")
     import pyautogui
     from .control import ComputerControl
-    from PIL import ImageGrab
+    from .tray import Tray, WindowLifecycle
+    from PIL import Image, ImageGrab, ImageTk
     import keyring
     from zeroconf import ServiceInfo, Zeroconf
 
@@ -31,15 +33,24 @@ def main():
     user32.SetProcessDPIAware()
     root = tk.Tk()
     root.title("Bluey")
-    root.geometry("460x480")
-    root.configure(bg="#1e1b29")
+    root.geometry("540x730")
+    root.minsize(540, 730)
+    root.configure(bg="#0d0e18")
+    root.option_add("*Font", ("Segoe UI", 10))
+    assets = Path(__file__).parent / "assets"
+    root.iconbitmap(str(assets / "bluey.ico"))
+    art = Image.open(assets / "bluey.png")
+    portrait = ImageTk.PhotoImage(art.resize((116, 104), Image.Resampling.LANCZOS))
+    companion = ImageTk.PhotoImage(art.resize((84, 76), Image.Resampling.LANCZOS))
     events = queue.Queue()
     enabled = threading.Event()
     stopped = threading.Event()
     pending_confirmation = None
+    pending_tracker_confirmation = None
     point = None
     caption = ""
     running = False
+    pairing_generation = 0
     zeroconf = info = host = None
     address = tk.StringVar(value="")
     status = tk.StringVar(value="Start pairing on a trusted private Wi-Fi network.")
@@ -52,13 +63,10 @@ def main():
     overlay.attributes("-transparentcolor", "#ff00ff")
     canvas = tk.Canvas(overlay, width=360, height=160, bg="#ff00ff", highlightthickness=0)
     canvas.pack()
-    canvas.create_oval(12, 10, 68, 66, fill="#6c86f5", outline="#a9bcff", width=3)
-    canvas.create_oval(24, 26, 34, 40, fill="white", outline="")
-    canvas.create_oval(45, 26, 55, 40, fill="white", outline="")
-    canvas.create_text(40, 50, text="⌣", fill="#1c1f66", font=("Segoe UI", 16))
-    bubble = canvas.create_text(82, 14, anchor="nw", width=265, text="", fill="#17151f",
+    canvas.create_image(2, 4, image=companion, anchor="nw")
+    bubble = canvas.create_text(99, 16, anchor="nw", width=249, text="", fill="#17151f",
                                 font=("Segoe UI", 11))
-    background = canvas.create_rectangle(77, 8, 354, 152, fill="#eef0ff", outline="")
+    background = canvas.create_rectangle(92, 8, 358, 152, fill="#eef0ff", outline="")
     canvas.tag_lower(background)
     overlay.withdraw()
 
@@ -75,11 +83,22 @@ def main():
     def key():
         return keyring.get_password("Bluey", "openai")
 
+    key_status = tk.StringVar()
+    def refresh_key_status():
+        try:
+            key_status.set("OpenAI key saved · reused every run" if key() else "No OpenAI key saved yet")
+        except Exception:
+            key_status.set("Credential Manager unavailable")
+    refresh_key_status()
+
     def set_key():
         value = simpledialog.askstring("OpenAI key", "Stored in Windows Credential Manager.", show="*", parent=root)
         if value and value.strip():
             try:
                 keyring.set_password("Bluey", "openai", value.strip())
+                if key() != value.strip():
+                    raise RuntimeError("Credential readback failed")
+                refresh_key_status()
                 status.set("Key saved in Windows Credential Manager.")
             except Exception:
                 messagebox.showerror("Key storage", "Windows Credential Manager could not save the key.")
@@ -121,6 +140,26 @@ def main():
             events.put(("stopped", "Computer control stopped at a failsafe corner."))
             return "Computer control stopped at a failsafe corner."
 
+    def run_tracker(name, args):
+        from . import project_tracker
+        if not running or not project_tracker.is_connected():
+            return "Project Manager is not connected."
+        request_generation = pairing_generation
+        done, result = threading.Event(), [False]
+        events.put(("tracker_confirm", (name, args, done, result, request_generation)))
+        deadline = time.monotonic() + 30
+        while running and request_generation == pairing_generation and time.monotonic() < deadline:
+            if done.wait(.1):
+                if result[0] and running and request_generation == pairing_generation and project_tracker.is_connected():
+                    return project_tracker.dispatch(name, args)
+                return "Project Manager request declined or cancelled."
+        done.set()
+        return "Project Manager request cancelled or timed out."
+
+    def tracker_connected():
+        from . import project_tracker
+        return project_tracker.is_connected()
+
     def toggle_control():
         if control_flag.get():
             stopped.clear()
@@ -148,8 +187,9 @@ def main():
             if not addresses:
                 raise RuntimeError("No LAN IPv4 address found")
             host = Host(screen, lambda kind, value: events.put((kind, value)), key,
-                        token_factory=lambda value: mint_token(value, enabled.is_set()), action=run_action)
-            port = host.start()
+                        token_factory=lambda value: mint_token(value, enabled.is_set(), tracker_enabled=tracker_connected()),
+                        action=run_action, tracker=run_tracker)
+            port = host.start(port=8765)
             zeroconf = Zeroconf()
             info = ServiceInfo("_googly._tcp.local.", socket.gethostname() + "._googly._tcp.local.",
                                addresses=[socket.inet_aton(a) for a in addresses], port=port,
@@ -166,11 +206,12 @@ def main():
             ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | 0x20 | 0x80000 | 0x08000000)
         except Exception as error:
             stop()
-            status.set(f"Pairing failed ({type(error).__name__}). Check your network.")
+            status.set("Port 8765 is busy. Quit the other Bluey instance and try again." if isinstance(error, OSError) and getattr(error, "winerror", None) == 10048 else f"Pairing failed ({type(error).__name__}). Check your network.")
 
     def stop():
-        nonlocal running, host, zeroconf, info, caption, point
+        nonlocal running, host, zeroconf, info, caption, point, pairing_generation
         running = False
+        pairing_generation += 1
         enabled.clear()
         stopped.set()
         control_flag.set(False)
@@ -192,11 +233,37 @@ def main():
             host.broadcast({"command": name})
 
     def tick():
-        nonlocal point, caption, pending_confirmation
+        nonlocal point, caption, pending_confirmation, pending_tracker_confirmation
         try:
             while True:
                 kind, value = events.get_nowait()
-                if kind == "confirm":
+                if kind == "ui":
+                    value()
+                    if lifecycle.quitting:
+                        return
+                    tray.refresh()
+                elif kind == "tracker_confirm":
+                    name, args, done, result, request_generation = value
+                    if done.is_set() or not running or request_generation != pairing_generation or pending_tracker_confirmation:
+                        done.set()
+                        continue
+                    dialog = tk.Toplevel(root)
+                    pending_tracker_confirmation = (dialog, done)
+                    dialog.title("Bluey Project Manager approval")
+                    dialog.attributes("-topmost", True)
+                    tk.Label(dialog, text=f"Allow Project Manager request?\n{name}\n{str(args)[:2100]}", wraplength=450).pack(padx=20, pady=16)
+                    tk.Label(dialog, text="This can read or update your connected Google Sheet.", wraplength=450).pack(padx=20)
+                    def finish_tracker(allow=False, window=dialog, completion=done, answer=result):
+                        nonlocal pending_tracker_confirmation
+                        if not completion.is_set():
+                            answer[0] = bool(allow and running)
+                            completion.set()
+                        window.destroy()
+                        pending_tracker_confirmation = None
+                    tk.Button(dialog, text="Allow", command=lambda fn=finish_tracker: fn(True)).pack(side="left", padx=20, pady=12)
+                    tk.Button(dialog, text="Decline", command=finish_tracker).pack(side="right", padx=20, pady=12)
+                    dialog.protocol("WM_DELETE_WINDOW", finish_tracker)
+                elif kind == "confirm":
                     name, args, done, result, foreground = value
                     if done.is_set() or not enabled.is_set() or stopped.is_set() or pending_confirmation:
                         done.set()
@@ -246,6 +313,11 @@ def main():
             done.set()
             dialog.destroy()
             pending_confirmation = None
+        if pending_tracker_confirmation and (pending_tracker_confirmation[1].is_set() or not running):
+            dialog, done = pending_tracker_confirmation
+            done.set()
+            dialog.destroy()
+            pending_tracker_confirmation = None
         if running and host:
             width, height = root.winfo_screenwidth(), root.winfo_screenheight()
             mouse = cursor()
@@ -258,18 +330,93 @@ def main():
                                      "mood": "pointing" if point else "listening", "talk": 0}})
         root.after(50, tick)
 
-    tk.Label(root, text="Bluey for Windows", bg="#1e1b29", fg="#a9bcff", font=("Segoe UI", 22)).pack(pady=15)
-    tk.Label(root, textvariable=status, bg="#1e1b29", fg="white", wraplength=390).pack(pady=10)
-    tk.Label(root, textvariable=address, bg="#1e1b29", fg="#a9bcff", wraplength=420).pack(pady=3)
-    for label, callback in [("OpenAI key…", set_key), ("Start pairing", start), ("Stop pairing", stop),
-                            ("Wake phone", lambda: command("wake")), ("Sleep phone", lambda: command("sleep"))]:
-        tk.Button(root, text=label, command=callback).pack(fill="x", padx=60, pady=2)
+    page = tk.Frame(root, bg="#0d0e18")
+    page.pack(fill="both", expand=True, padx=28, pady=22)
+    header = tk.Frame(page, bg="#0d0e18")
+    header.pack(fill="x", pady=(0, 18))
+    tk.Label(header, image=portrait, bg="#0d0e18").pack(side="left", padx=(0, 18))
+    title = tk.Frame(header, bg="#0d0e18")
+    title.pack(side="left")
+    tk.Label(title, text="Bluey", bg="#0d0e18", fg="#e9edff", font=("Segoe UI", 30, "bold")).pack(anchor="w")
+    tk.Label(title, text="Your phone companion, on Windows", bg="#0d0e18", fg="#a2abc9", font=("Segoe UI", 10)).pack(anchor="w")
+    card = tk.Frame(page, bg="#191d32", padx=18, pady=14)
+    card.pack(fill="x", pady=(0, 16))
+    tk.Label(card, text="CONNECTION", bg="#191d32", fg="#a9bcff", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+    tk.Label(card, textvariable=status, bg="#191d32", fg="#f1f3ff", wraplength=402, justify="left", height=3).pack(anchor="w", fill="x")
+    tk.Label(card, textvariable=address, bg="#191d32", fg="#a9bcff", wraplength=402, justify="left").pack(anchor="w")
+
+    def button(parent, label, callback, primary=False):
+        return tk.Button(parent, text=label, command=callback, bg="#a9bcff" if primary else "#252b46",
+                         fg="#11172d" if primary else "#e9edff", activebackground="#c0ceff" if primary else "#343e61",
+                         activeforeground="#11172d" if primary else "white", relief="flat", bd=0,
+                         padx=14, pady=10, cursor="hand2", highlightthickness=1, highlightbackground="#343e61")
+
+    pairing_row = tk.Frame(page, bg="#0d0e18")
+    pairing_row.pack(fill="x", pady=(0, 10))
+    button(pairing_row, "Start pairing", start, True).pack(side="left", fill="x", expand=True, padx=(0, 6))
+    button(pairing_row, "Stop pairing", stop).pack(side="left", fill="x", expand=True, padx=(6, 0))
+    phone_row = tk.Frame(page, bg="#0d0e18")
+    phone_row.pack(fill="x", pady=(0, 16))
+    button(phone_row, "Wake phone", lambda: command("wake")).pack(side="left", fill="x", expand=True, padx=(0, 6))
+    button(phone_row, "Sleep phone", lambda: command("sleep")).pack(side="left", fill="x", expand=True, padx=(6, 0))
+    key_row = tk.Frame(page, bg="#0d0e18")
+    key_row.pack(fill="x", pady=(0, 16))
+    button(key_row, "OpenAI key…", set_key).pack(side="left", padx=(0, 12))
+    tk.Label(key_row, textvariable=key_status, bg="#0d0e18", fg="#a2abc9", justify="left", font=("Segoe UI", 9)).pack(side="left")
+    safety = tk.Frame(page, bg="#191d32", padx=14, pady=10)
+    safety.pack(fill="x")
     control_flag = tk.BooleanVar(value=False)
-    tk.Checkbutton(root, text="Let Bluey use the computer", variable=control_flag,
-                   command=toggle_control, bg="#1e1b29", fg="white", selectcolor="#2b2f8f").pack(pady=8)
-    tk.Label(root, text="Emergency stop: Ctrl+Alt+S or move mouse to a screen corner.",
-             bg="#1e1b29", fg="#b9b2cc", wraplength=420).pack()
-    root.protocol("WM_DELETE_WINDOW", lambda: (stop(), root.destroy()))
+    tk.Checkbutton(safety, text="Let Bluey use the computer", variable=control_flag,
+                   command=toggle_control, bg="#191d32", fg="#e9edff", activebackground="#191d32", activeforeground="white",
+                   selectcolor="#2b2f8f").pack(anchor="w")
+    tk.Label(safety, text="Every action needs your approval.", bg="#191d32", fg="#a2abc9", font=("Segoe UI", 9)).pack(anchor="w", padx=4)
+    tk.Label(page, text="Emergency stop  ·  Ctrl+Alt+S or move to a screen corner", bg="#0d0e18", fg="#a2abc9", font=("Segoe UI", 9)).pack(pady=(14, 0))
+
+    def open_projects():
+        try:
+            from .project_tracker import open_project_manager
+            open_project_manager()
+        except Exception:
+            lifecycle.show()
+            messagebox.showerror("Project Manager", "Project Manager could not open. Check its configuration and try again.", parent=root)
+
+    def tray_control():
+        # Never touch Tk variables in pystray's worker thread.
+        control_flag.set(not control_flag.get())
+        toggle_control()
+
+    def configure_sheets():
+        lifecycle.show()
+        try:
+            from .project_tracker import configure
+            configure(root)
+        except Exception:
+            messagebox.showerror("Google Sheets", "Google Sheets settings could not open. Please try again.", parent=root)
+
+    def tray_start():
+        lifecycle.show()
+        start()
+
+    def tray_failed():
+        lifecycle.show()
+        status.set("System tray unavailable. Keep this window open; closing it will quit Bluey.")
+
+    tray = Tray(Image.open(assets / "bluey.ico"), lambda fn: events.put(("ui", fn)),
+                {"show": lambda: lifecycle.show(), "projects": open_projects, "sheets": configure_sheets,
+                 "start": tray_start, "stop": stop, "wake": lambda: command("wake"),
+                 "sleep": lambda: command("sleep"), "control": tray_control,
+                 "quit": lambda: lifecycle.quit()},
+                pairing=lambda: running, control=enabled.is_set, failed=tray_failed)
+    lifecycle = WindowLifecycle(root, tray, stop)
+    footer = tk.Frame(page, bg="#0d0e18")
+    footer.pack(fill="x", pady=(12, 0))
+    button(footer, "Open Project Manager", open_projects).pack(side="left")
+    button(footer, "Google Sheets…", configure_sheets).pack(side="left", padx=6)
+    button(footer, "Quit Bluey", lifecycle.quit).pack(side="right")
+    tk.Label(page, text="Close to keep Bluey in the system tray. Right-click its icon for controls.",
+             bg="#0d0e18", fg="#a2abc9", wraplength=450, font=("Segoe UI", 9)).pack(pady=(8, 0))
+    root.protocol("WM_DELETE_WINDOW", lifecycle.close)
+    tray.start()
     tick()
     root.mainloop()
 

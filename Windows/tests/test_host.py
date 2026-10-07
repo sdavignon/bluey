@@ -59,6 +59,21 @@ class HostTests(unittest.TestCase):
         self.assertEqual(result['text'], 'ephemeral-token')
         self.assertNotIn('desktop-only-key', json.dumps(result))
 
+    def test_token_errors_distinguish_auth_from_network(self):
+        import urllib.error
+        cases = [(ValueError('private'), 'No OpenAI key'),
+                 (urllib.error.HTTPError('private', 401, 'private', {}, None), 'saved OpenAI key was rejected'),
+                 (urllib.error.HTTPError('private', 429, 'private', {}, None), 'usage limit'),
+                 (OSError('private'), 'internet connection')]
+        for failure, expected in cases:
+            def fail(key, error=failure):
+                raise error
+            self.host.token_factory = fail
+            result = self.request(command='realtimeToken')
+            self.assertIsNone(result['text'])
+            self.assertIn(expected, result['error'])
+            self.assertNotIn('private', json.dumps(result))
+
     def test_screen_capture_and_point(self):
         result = self.request(command='tool', tool='look_at_screen', text='{}')
         self.assertEqual(result['command'], 'toolResult')
@@ -84,6 +99,21 @@ class HostTests(unittest.TestCase):
     def test_action_dispatch_and_unsupported_tool(self):
         self.assertEqual(self.request(command='tool', tool='click', text='{"x":1,"y":2}')['text'], 'Confirmed click')
         self.assertIn('unavailable', self.request(command='tool', tool='unknown', text='{}')['text'])
+
+    def test_tracker_is_opt_in_and_dispatch_is_allowlisted(self):
+        self.assertIn('unavailable', self.request(command='tool', tool='list_projects', text='{}')['text'])
+        calls = []
+        self.host.tracker = lambda name, args: calls.append((name, args)) or 'Approved tracker result'
+        self.assertEqual(self.request(command='tool', tool='list_projects', text='{}')['text'], 'Approved tracker result')
+        self.assertIn('unavailable', self.request(command='tool', tool='delete_project', text='{}')['text'])
+        self.assertEqual(calls, [('list_projects', {})])
+
+    def test_tracker_advertised_only_when_connected(self):
+        self.assertNotIn('list_projects', {t['name'] for t in session_config()['tools']})
+        config = session_config(tracker_enabled=True)
+        self.assertIn('list_projects', {t['name'] for t in config['tools']})
+        self.assertNotIn('click', {t['name'] for t in config['tools']})
+        self.assertIn('local approval', config['instructions'])
 
     def test_unsupported_correlated_request_gets_failure_reply(self):
         result = self.request(command='notes', text='{}')

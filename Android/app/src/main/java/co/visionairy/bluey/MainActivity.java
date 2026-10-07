@@ -35,6 +35,7 @@ public final class MainActivity extends Activity {
     };
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         FrameLayout root = new FrameLayout(this);
@@ -55,12 +56,13 @@ public final class MainActivity extends Activity {
                     case "sleep": voice.sleep(); break;
                 }
             }
-            public void status(String text, boolean connected) { connection.setText(text); if (!connected && voice != null) voice.sleep(); }
+            public void status(String text, boolean connected) { connection.setText(text); if (!connected && voice != null && voice.isAwake()) voice.sleep(); }
             public void services(String[] names) { desktops = names; }
         });
-        voice = new LiveVoice(link,new LiveVoice.Listener() {
+        voice = new LiveVoice(this,link,new LiveVoice.Listener() {
             public void state(String text) { state.setText(text); }
             public void caption(String text) { caption.setText(text); }
+            public void speaking(boolean active) { face.setSpeaking(active); }
         });
         GestureDetector gestures = new GestureDetector(this,new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onDown(MotionEvent e) { return true; }
@@ -83,6 +85,8 @@ public final class MainActivity extends Activity {
         Button askButton = new Button(this); askButton.setText(R.string.ask_now);
         askButton.setOnClickListener(v -> { if (voice.isAwake()) { voice.beginAsk(); voice.endAsk(); } else wake(); });
         actions.addView(wakeButton); actions.addView(askButton);
+        Button testVoice = new Button(this); testVoice.setText("Test voice");
+        testVoice.setOnClickListener(v -> voice.testSpeech()); actions.addView(testVoice);
         root.addView(actions, new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.BOTTOM | android.view.Gravity.START));
         // Keep the face unobstructed like iPhone; explicit controls remain one tap away.
         actions.setVisibility(View.GONE); pairing.setVisibility(View.GONE);
