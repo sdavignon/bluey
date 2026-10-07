@@ -45,6 +45,7 @@ def main():
     status = tk.StringVar(value="Start pairing on a trusted private Wi-Fi network.")
 
     overlay = tk.Toplevel(root)
+    overlay.title("Bluey overlay")
     overlay.overrideredirect(True)
     overlay.attributes("-topmost", True)
     overlay.configure(bg="#ff00ff")
