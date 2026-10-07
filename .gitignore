@@ -18,3 +18,5 @@ Windows/dist/
 Windows/build/
 __pycache__/
 *.pyc
+Windows/.tools/
+Windows/Bluey-Android-debug.apk

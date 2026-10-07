@@ -35,3 +35,15 @@ python -m PyInstaller --noconfirm --windowed --onedir --name Bluey --paths . --c
 ```
 
 The output is `dist/Bluey/Bluey.exe`; distribute the complete `dist/Bluey` directory. The Windows CI job builds this directory as an artifact. Windows runtime validation still needs actual Windows and a paired phone. The protocol, host dispatch, and automation-policy tests can run on Linux without a desktop by injecting screen/input adapters.
+
+## Install the Android companion over USB
+
+Download the supplied `Bluey-Android-debug.apk` into this directory. On the phone enable **Developer options → USB debugging**, connect it to this Windows PC, and unlock it. Run:
+
+```powershell
+.\install-android.ps1
+```
+
+The script downloads Google's Windows platform-tools, verifies the published checksum, lists authorized devices, installs the APK, and launches Bluey. Accept the USB debugging authorization prompt on the phone. If multiple phones are attached, pass `-DeviceSerial` with the intended serial from the displayed list. It never uninstalls an existing application or removes its data. An APK built with a different debug signing key may require you to resolve a signing conflict yourself.
+
+The USB cable is used for installation. Normal Bluey pairing still uses the phone and PC's shared trusted Wi-Fi. Start the desktop with `run.ps1`, choose **Start pairing**, and select the desktop on the phone. Add the OpenAI key in the desktop app to enable voice. Test an ordinary question first; then enable computer control, restart voice, and verify one declined and one approved action.
