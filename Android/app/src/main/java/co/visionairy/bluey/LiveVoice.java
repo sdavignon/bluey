@@ -70,7 +70,13 @@ final class LiveVoice {
                     ui.post(() -> { if (run == generation && awake) { try { handle(new JSONObject(text)); } catch (Exception e) { fail("Invalid voice response."); } } });
                 }
                 @Override public void onFailure(WebSocket ws, Throwable error, Response response) {
-                    ui.post(() -> { if (run == generation && awake) fail("Voice connection lost. Double tap to reconnect."); });
+                    ui.post(() -> {
+                        if (run != generation || !awake) return;
+                        int code = response == null ? 0 : response.code();
+                        if (code == 401 || code == 403) fail("OpenAI rejected the key or account. Check Voice settings or the paired desktop key.");
+                        else if (code == 429) fail("OpenAI usage limit reached. Check your account quota and billing.");
+                        else fail("Voice connection lost. Double tap to reconnect.");
+                    });
                 }
                 @Override public void onClosing(WebSocket ws, int code, String reason) { ws.close(code, reason); }
                 @Override public void onClosed(WebSocket ws, int code, String reason) {

@@ -1,5 +1,7 @@
 # Bluey for Android
 
+**Standalone use:** open **Voice settings**, save your OpenAI key, leave **Standalone phone mode** and **Speak replies aloud** enabled, then tap **Wake / sleep**. No PC is required. See the standalone section below.
+
 An Android 8+ companion for a Mac or Windows Bluey desktop. Open this directory in Android Studio, use JDK 17+, install Android SDK 35, and run on a physical phone. Or build with the checked-in Gradle wrapper:
 
 ```sh
@@ -38,3 +40,5 @@ Tap **Wake / sleep** or double tap the face, grant microphone permission, hold t
 To use a computer again, uncheck standalone mode in **Voice settings**, save, and pair the desktop. That mode obtains an ephemeral token from the desktop and can run its tools; the phone key is not sent to the desktop. Spoken replies work in paired mode too. Losing desktop discovery or a desktop connection cannot terminate a standalone session.
 
 Validate on your phone with the PC switched off: save the key, wake Bluey, ask an ordinary question, hear the answer, interrupt a reply by holding, then say "go to sleep" and verify speech finishes before the microphone stops. Repeat after denying microphone permission, with spoken replies off, and with the phone backgrounded. These real microphone, Keystore, TTS, and account checks require the device; local JVM tests validate the session configuration and computer-tool boundary.
+
+The downloadable debug APK for this update uses a different signing key from the initial cloud-built 0.1 APK. Android will not install it over that older signature. If you installed that earlier APK, uninstall it yourself before installing this one; uninstalling clears the old app settings. The USB installation script intentionally never uninstalls it automatically. Retain your signing keystore for future updates to avoid this conflict.
