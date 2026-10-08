@@ -5,4 +5,16 @@
     <string name="invalid_address">Enter a valid address and port.</string>
     <string name="wake_sleep">Wake / sleep</string>
     <string name="ask_now">Ask now</string>
+    <string name="voice_settings">Voice settings</string>
+    <string name="standalone_mode">Standalone phone mode (no PC)</string>
+    <string name="spoken_replies">Speak replies aloud</string>
+    <string name="standalone_status">Phone mode · no PC needed · Internet required</string>
+    <string name="phone_key_help">For standalone mode, enter your OpenAI API key. It is saved securely on this phone. OpenAI usage charges apply. In paired mode, use the desktop key instead.</string>
+    <string name="phone_key_hint">OpenAI key (leave blank to keep saved key)</string>
+    <string name="save">Save</string>
+    <string name="remove_key">Remove phone key</string>
+    <string name="key_removed">Phone key removed.</string>
+    <string name="settings_saved">Settings saved. Tap Wake / sleep to start.</string>
+    <string name="key_save_failed">Could not securely save the key. Try again.</string>
+    <string name="key_unlock_failed">Could not unlock the saved key. Save it again in Voice settings.</string>
 </resources>

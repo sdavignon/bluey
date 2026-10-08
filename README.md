@@ -60,3 +60,7 @@ Bluey now has an [Android companion](Android/README.md) and a [Windows desktop h
 | Automatic long-session voice recovery | Yes | Restart by double tap | Depends on phone |
 
 Windows requires Python 3.11+ with Tcl/Tk; Android requires Android 8+ and builds with SDK 35/JDK 17+. GitHub Actions builds the Android debug APK, tests both implementations, and packages the Windows application. The Apple implementations remain intact.
+
+### Android without a computer
+
+Open **Voice settings** on Android, select **Standalone phone mode**, save your OpenAI API key, and enable **Speak replies aloud**. Bluey connects directly to OpenAI and reads replies using the phone's TTS voice. No desktop connection is needed; Internet and OpenAI API access are required. The phone encrypts its key using Android Keystore. Hold to ask, release to hear the answer, and double tap to sleep. PC screen and computer-control tools remain available in paired mode only. See [Android setup](Android/README.md#standalone-phone-agent-and-spoken-replies-02).

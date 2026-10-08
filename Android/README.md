@@ -26,3 +26,15 @@ Pairing is unencrypted and unauthenticated to remain compatible with the Apple p
 5. Background the phone during capture and verify Android's microphone indicator stops; return and verify voice is asleep.
 
 These hardware and API checks are separate from compilation, lint, and local framing unit tests.
+
+## Standalone phone agent and spoken replies (0.2)
+
+Bluey can now run on Android without pairing to any computer. Open **Voice settings**, leave **Standalone phone mode (no PC)** selected, enter your own OpenAI API key, and enable **Speak replies aloud**. The phone encrypts the saved key with a non-exportable Android Keystore AES-GCM key; the saved preference contains only ciphertext and an IV. Backups and transfers exclude these app preferences. The key entry dialog blocks screenshots and does not save its text as view state. **Remove phone key** removes the saved credential. Never put this key in repository files or send it in chat.
+
+Standalone mode is the default. The phone connects directly to OpenAI over a verified-TLS WebSocket and configures its own agent session. Internet access and an OpenAI account with access to the configured Realtime model are required; API usage is billed to that account. This is independent of the PC, not an offline language model. The agent answers questions and helps with reasoning, planning and writing, but cannot inspect or operate a PC, control phone apps, read local files, or search the live web in standalone mode. Only the local `go_to_sleep` tool is advertised.
+
+Tap **Wake / sleep** or double tap the face, grant microphone permission, hold to ask and release. Replies appear as text and are read aloud through Android's system TTS engine. Microphone audio is not sent while TTS is speaking (including a short echo tail), and holding again interrupts playback. Sleep and backgrounding stop both microphone capture and speech. If no installed TTS voice supports your phone's language, the reply stays visible and the app asks you to check Android's text-to-speech settings. Long replies are queued in engine-supported chunks. Turning **Speak replies aloud** off keeps text-only replies.
+
+To use a computer again, uncheck standalone mode in **Voice settings**, save, and pair the desktop. That mode obtains an ephemeral token from the desktop and can run its tools; the phone key is not sent to the desktop. Spoken replies work in paired mode too. Losing desktop discovery or a desktop connection cannot terminate a standalone session.
+
+Validate on your phone with the PC switched off: save the key, wake Bluey, ask an ordinary question, hear the answer, interrupt a reply by holding, then say "go to sleep" and verify speech finishes before the microphone stops. Repeat after denying microphone permission, with spoken replies off, and with the phone backgrounded. These real microphone, Keystore, TTS, and account checks require the device; local JVM tests validate the session configuration and computer-tool boundary.
